@@ -6,5 +6,8 @@ Future<Map<String, dynamic>> getDeviceInfo() async {
     'isTensorSoC': 0.0,
     'socFamily': 8, // unknown
     'socHardware': '',
+    'gpuName': '',
+    'gpuVramGB': 0.0,
+    'deviceType': 'Web',
   };
 }

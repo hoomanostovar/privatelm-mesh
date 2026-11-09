@@ -131,12 +131,15 @@ class InferenceService extends GetxService {
       final deviceTier = _getDeviceTier();
       final isTensorSoC = _getIsTensorSoC();
 
-      // Phone cluster: GGUF layers spread across worker phones. This phone
-      // then runs its share on the CPU.
+      // Device cluster: GGUF layers spread across worker nodes.
       var clusterWorkers = 0;
       if (!isLiteRt && Get.isRegistered<ClusterService>()) {
-        clusterWorkers = await Get.find<ClusterService>()
-            .applyForNextLoad(modelPath, modelName: modelName);
+        try {
+          clusterWorkers = await Get.find<ClusterService>()
+              .applyForNextLoad(modelPath, modelName: modelName);
+        } catch (e) {
+          print('[Inference] Cluster check: $e');
+        }
       }
 
       final requestedModelName = modelName ?? modelPath.split('/').last;

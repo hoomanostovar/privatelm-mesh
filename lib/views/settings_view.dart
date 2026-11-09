@@ -115,7 +115,7 @@ class SettingsView extends GetView<SettingsController> {
               if (Get.isRegistered<ClusterService>())
                 AppRow(
                   icon: Icons.hub_outlined,
-                  title: 'Phone cluster',
+                  title: 'Device cluster',
                   trailing: Text(
                       switch (Get.find<ClusterService>().role) {
                         ClusterRole.master => 'Master',
@@ -132,7 +132,7 @@ class SettingsView extends GetView<SettingsController> {
               if (showUpdates) _buildUpdatesRow(context),
               _navRow(
                 context,
-                icon: Icons.smartphone_rounded,
+                icon: device.deviceIcon,
                 title: 'Device',
                 value: '${device.totalRamGB.value.toStringAsFixed(1)} GB RAM',
                 builder: (ctx) => AppGroup(children: [_buildDeviceCard(ctx)]),
@@ -150,10 +150,10 @@ class SettingsView extends GetView<SettingsController> {
                   child: Image.asset('assets/icons/appicon.png',
                       width: 32, height: 32),
                 ),
-                title: 'PrivateLM',
+                title: 'PrivateLM Mesh',
                 subtitle: controller.appVersion.value.isEmpty
-                    ? 'by orailnoor & techjarves'
-                    : 'Version ${controller.appVersion.value} · by orailnoor & techjarves',
+                    ? 'by hoomanostovar'
+                    : 'Version ${controller.appVersion.value} · by hoomanostovar',
               ),
             ]),
           ],
@@ -562,13 +562,13 @@ class SettingsView extends GetView<SettingsController> {
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            const IconBadge(Icons.smartphone_rounded),
+            IconBadge(device.deviceIcon),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('$ram GB RAM',
+                    Text('${device.deviceType.value} · $ram GB RAM',
                         style: t.bodyStrong.copyWith(fontFeatures: _tabular)),
                     if (tierHint.isNotEmpty) ...[
                       const SizedBox(height: 2),
@@ -585,6 +585,11 @@ class SettingsView extends GetView<SettingsController> {
             padding: const EdgeInsets.symmetric(vertical: 12),
             child: Container(height: 0.5, color: t.hairline),
           ),
+          if (device.gpuName.value.isNotEmpty) ...[
+            kv('Graphics (GPU)', device.gpuName.value, color: t.accent),
+            if (device.gpuVramGB.value > 0)
+              kv('GPU VRAM', '${device.gpuVramGB.value.toStringAsFixed(1)} GB'),
+          ],
           kv('Available memory',
               '${device.availableRamGB.value.toStringAsFixed(1)} GB'),
           kv('Recommended context', '${device.recommendedContextSize}'),

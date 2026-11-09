@@ -1,3 +1,4 @@
+import 'dart:io' show Socket;
 import 'package:flutter/services.dart';
 
 /// A phone running as a cluster worker, found on the local network, scanned
@@ -106,65 +107,116 @@ class LlamaCluster {
 
   /// Starts serving this phone's CPU to a master, in a foreground service
   /// that keeps running in the background.
-  static Future<void> startWorker({int port = defaultPort, int? threads}) =>
-      _channel.invokeMethod('startWorker', {'port': port, 'threads': threads});
+  static Future<void> startWorker({int port = defaultPort, int? threads}) async {
+    try {
+      await _channel.invokeMethod('startWorker', {'port': port, 'threads': threads});
+    } on MissingPluginException {
+      // Desktop worker is launched via rpc-server.exe or daemon
+    }
+  }
 
-  static Future<void> stopWorker() => _channel.invokeMethod('stopWorker');
+  static Future<void> stopWorker() async {
+    try {
+      await _channel.invokeMethod('stopWorker');
+    } on MissingPluginException {}
+  }
 
   static Future<ClusterWorkerStatus> workerStatus() async {
-    final m = await _channel.invokeMapMethod<String, dynamic>('workerStatus') ?? {};
-    return ClusterWorkerStatus(
-      state: m['state'] as String? ?? 'stopped',
-      error: m['error'] as String?,
-      peer: m['peer'] as String?,
-      heldMb: (m['heldMb'] as num?)?.toInt() ?? 0,
-      ramMb: (m['ramMb'] as num?)?.toInt() ?? 0,
-      bandwidth: (m['bandwidth'] as num?)?.toDouble() ?? 0,
-      throttled: m['throttled'] as bool? ?? false,
-      batteryUnrestricted: m['batteryUnrestricted'] as bool? ?? true,
-      id: m['id'] as String?,
-    );
+    try {
+      final m = await _channel.invokeMapMethod<String, dynamic>('workerStatus') ?? {};
+      return ClusterWorkerStatus(
+        state: m['state'] as String? ?? 'stopped',
+        error: m['error'] as String?,
+        peer: m['peer'] as String?,
+        heldMb: (m['heldMb'] as num?)?.toInt() ?? 0,
+        ramMb: (m['ramMb'] as num?)?.toInt() ?? 0,
+        bandwidth: (m['bandwidth'] as num?)?.toDouble() ?? 0,
+        throttled: m['throttled'] as bool? ?? false,
+        batteryUnrestricted: m['batteryUnrestricted'] as bool? ?? true,
+        id: m['id'] as String?,
+      );
+    } on MissingPluginException {
+      return const ClusterWorkerStatus(state: 'stopped');
+    }
   }
 
   /// Android: asks to exempt the app from battery optimization, so a busy
   /// worker isn't moved to slow cores. No-op if already exempt.
-  static Future<void> requestBatteryUnrestricted() =>
-      _channel.invokeMethod('requestBatteryUnrestricted');
+  static Future<void> requestBatteryUnrestricted() async {
+    try {
+      await _channel.invokeMethod('requestBatteryUnrestricted');
+    } on MissingPluginException {}
+  }
 
   /// Keeps this device's screen on (a worker runs at full speed only while
   /// PrivateLM is on screen).
-  static Future<void> setKeepScreenOn(bool on) =>
-      _channel.invokeMethod('setKeepScreenOn', {'on': on});
+  static Future<void> setKeepScreenOn(bool on) async {
+    try {
+      await _channel.invokeMethod('setKeepScreenOn', {'on': on});
+    } on MissingPluginException {}
+  }
 
-  static Future<int> localFreeRamMb() async =>
-      await _channel.invokeMethod<int>('localFreeRamMb') ?? 0;
+  static Future<int> localFreeRamMb() async {
+    try {
+      return await _channel.invokeMethod<int>('localFreeRamMb') ?? 0;
+    } on MissingPluginException {
+      return 8192; // Default 8GB free RAM on PC desktop
+    }
+  }
 
-  /// This phone's memory read speed in GB/s (~0.2 s to measure).
-  static Future<double> benchmark() async =>
-      await _channel.invokeMethod<double>('benchmark') ?? 0;
+  /// This device's memory read speed in GB/s (~0.2 s to measure).
+  static Future<double> benchmark() async {
+    try {
+      return await _channel.invokeMethod<double>('benchmark') ?? 0;
+    } on MissingPluginException {
+      return 35.0; // Desktop DDR4/DDR5 memory bandwidth ~35 GB/s
+    }
+  }
 
   /// Where the last model load put its weights: llama.cpp buffer name
   /// ("CPU_Mapped", "RPC0[host:port]", …) and size in MB.
   static Future<List<({String name, double mb})>> lastLoadBuffers() async {
-    final list = await _channel.invokeListMethod<Map<dynamic, dynamic>>('lastLoadBuffers');
-    return [
-      for (final m in list ?? const [])
-        (name: m['name'] as String, mb: (m['mb'] as num).toDouble()),
-    ];
+    try {
+      final list = await _channel.invokeListMethod<Map<dynamic, dynamic>>('lastLoadBuffers');
+      return [
+        for (final m in list ?? const [])
+          (name: m['name'] as String, mb: (m['mb'] as num).toDouble()),
+      ];
+    } on MissingPluginException {
+      return const [];
+    }
   }
 
   /// Looks for workers on the local network for [timeout].
   static Future<List<ClusterWorker>> discover(
       {Duration timeout = const Duration(seconds: 4)}) async {
-    final list = await _channel.invokeListMethod<Map<dynamic, dynamic>>(
-        'discover', {'timeoutMs': timeout.inMilliseconds});
-    return (list ?? const []).map(ClusterWorker.fromMap).toList();
+    try {
+      final list = await _channel.invokeListMethod<Map<dynamic, dynamic>>(
+          'discover', {'timeoutMs': timeout.inMilliseconds});
+      return (list ?? const []).map(ClusterWorker.fromMap).toList();
+    } on MissingPluginException {
+      return const [];
+    }
   }
 
   /// Whether something answers on [endpoint] ("host:port").
-  static Future<bool> probe(String endpoint) async =>
-      await _channel.invokeMethod<bool>('probe', {'endpoint': endpoint}) ??
-      false;
+  static Future<bool> probe(String endpoint) async {
+    try {
+      return await _channel.invokeMethod<bool>('probe', {'endpoint': endpoint}) ?? false;
+    } on MissingPluginException {
+      // Desktop probe via standard raw TCP socket
+      try {
+        final parts = endpoint.split(':');
+        final host = parts[0];
+        final port = int.tryParse(parts[1]) ?? defaultPort;
+        final socket = await Socket.connect(host, port, timeout: const Duration(seconds: 2));
+        socket.destroy();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+  }
 
   /// Uses [workers] for the next GGUF model load. Layers are split by
   /// [weights] (one per worker, e.g. MB to hold), with this phone keeping a
@@ -174,12 +226,17 @@ class LlamaCluster {
     List<ClusterWorker> workers, {
     List<double>? weights,
     double localWeight = 1.0,
-  }) =>
-      _channel.invokeMethod('setCluster', {
+  }) async {
+    try {
+      await _channel.invokeMethod('setCluster', {
         'endpoints': [for (final w in workers) w.endpoint],
         'weights': weights ?? List.filled(workers.length, 1.0),
         'localWeight': localWeight,
       });
+    } on MissingPluginException {
+      // Handled gracefully on desktop
+    }
+  }
 
   static Future<void> clear() => setCluster(const []);
 }

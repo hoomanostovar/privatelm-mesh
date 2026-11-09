@@ -1,10 +1,13 @@
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/material.dart' show IconData, Icons;
 import 'package:get/get.dart';
 
 import 'device_info_native.dart' if (dart.library.html) 'device_info_web.dart'
     as platform_info;
 
-/// Device capability detection — reads RAM to set safe inference limits.
-/// Cross-platform: works on Android/iOS natively, defaults on web.
+/// Device capability detection — reads RAM and GPU to set safe inference limits.
+/// Cross-platform: works on Windows, macOS, Linux, Android, iOS, and Web.
 class DeviceInfoService extends GetxService {
   final totalRamGB = 0.0.obs;
   final availableRamGB = 0.0.obs;
@@ -12,6 +15,25 @@ class DeviceInfoService extends GetxService {
   final isTensorSoC = false.obs;
   final socFamily = platform_info.SocFamily.unknown.obs;
   final socHardware = ''.obs;
+  final gpuName = ''.obs;
+  final gpuVramGB = 0.0.obs;
+  final deviceType = 'PC'.obs;
+
+  IconData get deviceIcon {
+    if (kIsWeb) return Icons.language_rounded;
+    if (Platform.isWindows) return Icons.desktop_windows_rounded;
+    if (Platform.isMacOS) return Icons.laptop_mac_rounded;
+    if (Platform.isLinux) return Icons.terminal_rounded;
+    return Icons.smartphone_rounded;
+  }
+
+  String get deviceNoun {
+    if (kIsWeb) return 'browser';
+    if (Platform.isWindows) return 'PC';
+    if (Platform.isMacOS) return 'Mac';
+    if (Platform.isLinux) return 'Linux';
+    return 'phone';
+  }
 
   // Recommended limits based on device RAM
   int get recommendedContextSize => _tierConfig['contextSize']!;
@@ -89,20 +111,25 @@ class DeviceInfoService extends GetxService {
     final clamped = rawIndex < 0 ? 0 : (rawIndex > 8 ? 8 : rawIndex);
     socFamily.value = platform_info.SocFamily.values[clamped];
     socHardware.value = (info['socHardware'] as String?) ?? '';
+    gpuName.value = (info['gpuName'] as String?) ?? '';
+    gpuVramGB.value = ((info['gpuVramGB'] as num?) ?? 0.0).toDouble();
+    deviceType.value = (info['deviceType'] as String?) ?? (kIsWeb ? 'Web' : Platform.isWindows ? 'PC' : 'Phone');
   }
 
   String get tierDescription {
+    final noun = deviceNoun;
+    final gpuSuffix = gpuName.value.isNotEmpty ? ' · GPU: ${gpuName.value}' : '';
     switch (deviceTier.value) {
       case 'low':
-        return '⚠️ Low RAM (${totalRamGB.value.toStringAsFixed(1)}GB) — Use small models only';
+        return '⚠️ Low RAM (${totalRamGB.value.toStringAsFixed(1)}GB) — Use small models only$gpuSuffix';
       case 'mid':
-        return '📱 Mid-range (${totalRamGB.value.toStringAsFixed(1)}GB) — Good for 1-3B models';
+        return '⚡ Mid-range (${totalRamGB.value.toStringAsFixed(1)}GB) — Good for 1-3B models$gpuSuffix';
       case 'high':
-        return '💪 High-end (${totalRamGB.value.toStringAsFixed(1)}GB) — Can run 3-7B models';
+        return '💪 High-end (${totalRamGB.value.toStringAsFixed(1)}GB) — Can run 3-7B models$gpuSuffix';
       case 'ultra':
-        return '🚀 Ultra (${totalRamGB.value.toStringAsFixed(1)}GB) — Full performance mode';
+        return '🚀 Ultra $noun (${totalRamGB.value.toStringAsFixed(1)}GB) — Full performance mode$gpuSuffix';
       default:
-        return '📱 ${totalRamGB.value.toStringAsFixed(1)}GB RAM detected';
+        return '💻 ${totalRamGB.value.toStringAsFixed(1)}GB RAM detected$gpuSuffix';
     }
   }
 }

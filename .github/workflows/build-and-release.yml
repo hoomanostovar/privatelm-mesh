@@ -29,10 +29,10 @@ jobs:
             target: x86_64-unknown-linux-gnu
             bin: privatelm-mesh-daemon
             asset: privatelm-mesh-daemon-linux-x64.tar.gz
-          - os: macos-13
-            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
             bin: privatelm-mesh-daemon
-            asset: privatelm-mesh-daemon-macos-x64.tar.gz
+            asset: privatelm-mesh-daemon-macos-arm64.tar.gz
 
     steps:
       - name: Checkout repository
@@ -130,6 +130,12 @@ jobs:
       - name: Build Linux Desktop Release
         run: flutter build linux --release
 
+      - name: Build Linux Desktop Engine
+        run: |
+          chmod +x ./scripts/build_desktop_engine.sh
+          ./scripts/build_desktop_engine.sh
+          cp bin/* build/linux/x64/release/bundle/ || true
+
       - name: Package Linux Bundle
         run: |
           tar -czvf PrivateLM-Mesh-Linux-x64.tar.gz -C build/linux/x64/release/bundle .
@@ -142,7 +148,7 @@ jobs:
 
   build-flutter-macos:
     name: Build Flutter Client (macOS)
-    runs-on: macos-13
+    runs-on: macos-15
     continue-on-error: true
     steps:
       - name: Checkout repository
@@ -159,6 +165,12 @@ jobs:
 
       - name: Build macOS Desktop Release
         run: flutter build macos --release
+
+      - name: Build macOS Desktop Engine (llama.cpp Metal)
+        run: |
+          chmod +x ./scripts/build_desktop_engine.sh
+          ./scripts/build_desktop_engine.sh
+          cp bin/* build/macos/Build/Products/Release/privatelm.app/Contents/MacOS/ || true
 
       - name: Package macOS App Bundle
         run: |
@@ -192,8 +204,11 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Install dependencies
-        run: flutter pub get
+      - name: Install dependencies & modern glslc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslc
+          flutter pub get
 
       - name: Build Android Release APK
         env:
@@ -223,8 +238,8 @@ jobs:
         include:
           - os: ubuntu-latest
             asset: rpc-server-linux-x64.tar.gz
-          - os: macos-13
-            asset: rpc-server-macos.tar.gz
+          - os: macos-15
+            asset: rpc-server-macos-arm64.tar.gz
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

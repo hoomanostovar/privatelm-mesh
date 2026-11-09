@@ -34,6 +34,7 @@ tower-http = { version = "0.5", features = ["cors"] }
 
 # Utility
 hostname = "0.4"
+which = "6.0"
 uuid = { version = "1.8", features = ["v4"] }
 anyhow = "1.0"
 thiserror = "1.0"

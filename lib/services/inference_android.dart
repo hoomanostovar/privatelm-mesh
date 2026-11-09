@@ -1,9 +1,13 @@
 import 'dart:async';
 import 'dart:ffi' show Abi;
 import 'dart:io' show Platform, Directory, File;
+import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_litert_lm/flutter_litert_lm.dart';
 import 'package:llama_flutter_android/llama_flutter_android.dart';
+import 'desktop_inference_engine.dart';
+import 'device_info_service.dart';
+import 'cluster_service.dart';
 
 /// Whether the current platform supports local inference.
 bool get supportsLocalInference =>
@@ -91,6 +95,35 @@ class InferenceEngine {
 
     _isLiteRt = false;
     _ggufVisionLoaded = false;
+
+    final isDesktop = Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+    if (isDesktop) {
+      final dev = Get.isRegistered<DeviceInfoService>() ? Get.find<DeviceInfoService>() : null;
+      final gpuNameStr = dev?.gpuName.value ?? '';
+      final gpuLayers = allowGgufGpu && gpuNameStr.isNotEmpty ? 99 : 0;
+      
+      List<String>? rpcEndpoints;
+      if (Get.isRegistered<ClusterService>()) {
+        final cluster = Get.find<ClusterService>();
+        if (cluster.enabled.value && cluster.workers.isNotEmpty) {
+          rpcEndpoints = cluster.workers.map((w) => w.endpoint).toList();
+        }
+      }
+
+      final result = await DesktopInferenceEngine.instance.loadModel(
+        modelPath: modelPath,
+        threads: 6,
+        contextSize: contextSize,
+        gpuLayers: gpuLayers,
+        mmprojPath: mmprojPath,
+        rpcEndpoints: rpcEndpoints,
+        onProgress: onProgress,
+      );
+      _hasLoadedModel = result.success;
+      _ggufVisionLoaded = DesktopInferenceEngine.instance.ggufVisionLoaded;
+      return result;
+    }
+
     _controller = LlamaController();
 
     // The native plugin can still hold a model this engine never loaded
@@ -388,11 +421,15 @@ class InferenceEngine {
         _subscription?.cancel();
         _onStop = null;
         if (stopNative) {
-          unawaited(controller
-                  ?.stop()
-                  .timeout(const Duration(seconds: 1))
-                  .catchError((_) {}) ??
-              Future<void>.value());
+          if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+            unawaited(DesktopInferenceEngine.instance.stopGeneration());
+          } else {
+            unawaited(controller
+                    ?.stop()
+                    .timeout(const Duration(seconds: 1))
+                    .catchError((_) {}) ??
+                Future<void>.value());
+          }
         }
         if (!completer.isCompleted) completer.complete(result);
       }
@@ -404,40 +441,53 @@ class InferenceEngine {
 
     // ── Use generateChat() for native template handling ──
     Stream<String>? stream;
-    try {
+    final isDesktop = Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+    if (isDesktop && DesktopInferenceEngine.instance.isModelLoaded) {
       final messages = _buildChatMessages(
           prompt, conversationHistory, systemPrompt,
           imagePath: imagePath);
-      stream = _controller!.generateChat(
+      stream = DesktopInferenceEngine.instance.generateChat(
         messages: messages,
-        template: null,
         maxTokens: maxTokens,
         temperature: temperature,
-        topP: 0.9,
-        topK: 40,
-        minP: 0.05,
-        repeatPenalty: 1.1,
-        repeatLastN: 64,
       );
-      print('[Inference] generateChat() started (${messages.length} messages)');
-    } catch (e) {
-      print('[Inference] generateChat() failed: $e — fallback to generate()');
+      print('[Inference] Desktop generateChat() started (${messages.length} messages)');
+    } else {
       try {
-        await _controller!.stop();
-      } catch (_) {}
-      await Future.delayed(const Duration(milliseconds: 100));
-      final fullPrompt =
-          _buildPrompt(prompt, conversationHistory, systemPrompt, modelName);
-      stream = _controller!.generate(
-        prompt: fullPrompt,
-        maxTokens: maxTokens,
-        temperature: temperature,
-        topP: 0.9,
-        topK: 40,
-        minP: 0.05,
-        repeatPenalty: 1.1,
-        repeatLastN: 64,
-      );
+        final messages = _buildChatMessages(
+            prompt, conversationHistory, systemPrompt,
+            imagePath: imagePath);
+        stream = _controller!.generateChat(
+          messages: messages,
+          template: null,
+          maxTokens: maxTokens,
+          temperature: temperature,
+          topP: 0.9,
+          topK: 40,
+          minP: 0.05,
+          repeatPenalty: 1.1,
+          repeatLastN: 64,
+        );
+        print('[Inference] generateChat() started (${messages.length} messages)');
+      } catch (e) {
+        print('[Inference] generateChat() failed: $e — fallback to generate()');
+        try {
+          await _controller!.stop();
+        } catch (_) {}
+        await Future.delayed(const Duration(milliseconds: 100));
+        final fullPrompt =
+            _buildPrompt(prompt, conversationHistory, systemPrompt, modelName);
+        stream = _controller!.generate(
+          prompt: fullPrompt,
+          maxTokens: maxTokens,
+          temperature: temperature,
+          topP: 0.9,
+          topK: 40,
+          minP: 0.05,
+          repeatPenalty: 1.1,
+          repeatLastN: 64,
+        );
+      }
     }
 
     int tokenCount = 0;
@@ -717,6 +767,9 @@ class InferenceEngine {
     _onStop = null;
     stopCallback?.call();
     unawaited(_subscription?.cancel() ?? Future<void>.value());
+    if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+      await DesktopInferenceEngine.instance.stopGeneration();
+    }
     if (_isLiteRt) {
       _liteConversationHasMessages = true;
       try {
@@ -759,6 +812,9 @@ class InferenceEngine {
     if (_disposed) return;
     await stop();
     _disposed = true;
+    if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+      await DesktopInferenceEngine.instance.unloadModel();
+    }
     if (_hasLoadedModel) {
       try {
         await _controller?.dispose();

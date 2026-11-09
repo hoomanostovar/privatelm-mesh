@@ -134,15 +134,110 @@ SocFamily _detectSocFamily(String cpuinfo, String hardware) {
   return SocFamily.unknown;
 }
 
-/// Native (Android/iOS/macOS/Linux) device info implementation.
+/// Native (Windows/macOS/Linux/Android/iOS) device info implementation.
 Future<Map<String, dynamic>> getDeviceInfo() async {
   double totalRam = 4.0;
   double availableRam = 2.0;
   SocFamily socFamily = SocFamily.unknown;
   String hardware = '';
+  String gpuName = '';
+  double gpuVramGB = 0.0;
+  String deviceType = 'Phone';
 
   try {
-    if (Platform.isAndroid || Platform.isLinux) {
+    if (Platform.isWindows) {
+      deviceType = 'PC';
+      try {
+        final kernel32 = DynamicLibrary.open('kernel32.dll');
+        final globalMemoryStatusEx = kernel32.lookupFunction<
+            Int32 Function(Pointer<Uint8>),
+            int Function(Pointer<Uint8>)>('GlobalMemoryStatusEx');
+        final buffer = calloc<Uint8>(64);
+        buffer.cast<Uint32>().value = 64; // dwLength
+        if (globalMemoryStatusEx(buffer) != 0) {
+          final totalPhysBytes = (buffer + 8).cast<Uint64>().value;
+          final availPhysBytes = (buffer + 16).cast<Uint64>().value;
+          totalRam = totalPhysBytes / (1024 * 1024 * 1024);
+          availableRam = availPhysBytes / (1024 * 1024 * 1024);
+        }
+        calloc.free(buffer);
+      } catch (_) {
+        totalRam = 16.0;
+        availableRam = 8.0;
+      }
+
+      // Query native Windows GPU via registry (instant, ~5ms)
+      try {
+        for (var i = 0; i < 4; i++) {
+          final idx = i.toString().padLeft(4, '0');
+          final regResult = Process.runSync('reg', [
+            'query',
+            'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\$idx',
+            '/v',
+            'DriverDesc',
+          ]);
+          if (regResult.exitCode == 0) {
+            final match = RegExp(r'DriverDesc\s+REG_SZ\s+(.+)')
+                .firstMatch(regResult.stdout.toString());
+            if (match != null) {
+              final candidate = match.group(1)!.trim();
+              if (candidate.isNotEmpty && !candidate.toLowerCase().contains('virtual') && !candidate.toLowerCase().contains('basic render')) {
+                gpuName = candidate;
+                // Query VRAM
+                final vramResult = Process.runSync('reg', [
+                  'query',
+                  'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\$idx',
+                  '/v',
+                  'HardwareInformation.MemorySize',
+                ]);
+                if (vramResult.exitCode == 0) {
+                  final vramMatch = RegExp(r'HardwareInformation\.MemorySize\s+REG_DWORD\s+0x([0-9a-fA-F]+)')
+                      .firstMatch(vramResult.stdout.toString());
+                  if (vramMatch != null) {
+                    final bytes = int.tryParse(vramMatch.group(1)!, radix: 16) ?? 0;
+                    gpuVramGB = bytes / (1024 * 1024 * 1024);
+                  }
+                }
+                break;
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
+      // Fallback to CIM if registry wasn't resolved
+      if (gpuName.isEmpty) {
+        try {
+          final res = Process.runSync('powershell', [
+            '-NoProfile',
+            '-Command',
+            '(Get-CimInstance Win32_VideoController | Select-Object -First 1).Name'
+          ]);
+          if (res.exitCode == 0 && res.stdout.toString().trim().isNotEmpty) {
+            gpuName = res.stdout.toString().trim();
+          }
+        } catch (_) {}
+      }
+      socFamily = SocFamily.unknown;
+    } else if (Platform.isMacOS) {
+      deviceType = 'Mac';
+      totalRam = 16.0;
+      availableRam = 8.0;
+      socFamily = SocFamily.apple;
+      try {
+        final res = Process.runSync('sysctl', ['-n', 'machdep.cpu.brand_string']);
+        if (res.exitCode == 0) hardware = res.stdout.toString().trim();
+      } catch (_) {}
+      try {
+        final res = Process.runSync('system_profiler', ['SPDisplaysDataType']);
+        final match = RegExp(r'Chipset Model:\s+(.+)').firstMatch(res.stdout.toString());
+        gpuName = match != null ? match.group(1)!.trim() : 'Apple Metal GPU';
+      } catch (_) {
+        gpuName = 'Apple Metal GPU';
+      }
+      gpuVramGB = totalRam;
+    } else if (Platform.isLinux) {
+      deviceType = 'Linux PC';
       final meminfo = await File('/proc/meminfo').readAsString();
       final totalMatch = RegExp(r'MemTotal:\s+(\d+)').firstMatch(meminfo);
       if (totalMatch != null) {
@@ -152,8 +247,27 @@ Future<Map<String, dynamic>> getDeviceInfo() async {
       if (availMatch != null) {
         availableRam = int.parse(availMatch.group(1)!) / 1024 / 1024;
       }
-
-      // Detect SoC family from /proc/cpuinfo
+      try {
+        final res = Process.runSync('lspci', []);
+        for (final line in res.stdout.toString().split('\n')) {
+          if (line.toLowerCase().contains('vga compatible controller') ||
+              line.toLowerCase().contains('3d controller')) {
+            gpuName = line.split(':').last.trim();
+            break;
+          }
+        }
+      } catch (_) {}
+    } else if (Platform.isAndroid) {
+      deviceType = 'Android Phone';
+      final meminfo = await File('/proc/meminfo').readAsString();
+      final totalMatch = RegExp(r'MemTotal:\s+(\d+)').firstMatch(meminfo);
+      if (totalMatch != null) {
+        totalRam = int.parse(totalMatch.group(1)!) / 1024 / 1024;
+      }
+      final availMatch = RegExp(r'MemAvailable:\s+(\d+)').firstMatch(meminfo);
+      if (availMatch != null) {
+        availableRam = int.parse(availMatch.group(1)!) / 1024 / 1024;
+      }
       try {
         final cpuinfo = await File('/proc/cpuinfo').readAsString();
         hardware = RegExp(r'Hardware\s*:\s*(.+)', caseSensitive: false)
@@ -164,37 +278,14 @@ Future<Map<String, dynamic>> getDeviceInfo() async {
         socFamily = _detectSocFamily(cpuinfo, hardware);
       } catch (_) {}
     } else if (Platform.isIOS) {
+      deviceType = 'iPhone';
       final plugin = LlamaHostApi();
       final gpuInfo = await plugin.detectGpu();
       totalRam = gpuInfo.deviceLocalMemoryBytes / (1024 * 1024 * 1024);
       availableRam = gpuInfo.freeRamBytes / (1024 * 1024 * 1024);
+      gpuName = gpuInfo.gpuName;
+      gpuVramGB = gpuInfo.deviceLocalMemoryBytes / (1024 * 1024 * 1024);
       socFamily = SocFamily.apple;
-    } else if (Platform.isMacOS) {
-      totalRam = 16.0;
-      availableRam = 8.0;
-      socFamily = SocFamily.apple;
-    } else if (Platform.isWindows) {
-      try {
-        final kernel32 = DynamicLibrary.open('kernel32.dll');
-        final globalMemoryStatusEx = kernel32.lookupFunction<
-            Int32 Function(Pointer<Uint8>),
-            int Function(Pointer<Uint8>)>('GlobalMemoryStatusEx');
-        final buffer = calloc<Uint8>(64);
-        buffer.cast<Uint32>().value = 64; // dwLength
-        if (globalMemoryStatusEx(buffer) != 0) {
-          // ullTotalPhys is at offset 8 (uint64)
-          final totalPhysBytes = buffer.elementAt(8).cast<Uint64>().value;
-          // ullAvailPhys is at offset 16 (uint64)
-          final availPhysBytes = buffer.elementAt(16).cast<Uint64>().value;
-          totalRam = totalPhysBytes / (1024 * 1024 * 1024);
-          availableRam = availPhysBytes / (1024 * 1024 * 1024);
-        }
-        calloc.free(buffer);
-      } catch (_) {
-        totalRam = 16.0;
-        availableRam = 8.0;
-      }
-      socFamily = SocFamily.unknown;
     }
   } catch (e) {
     print('[DeviceInfo] Failed to read device info: $e');
@@ -206,5 +297,8 @@ Future<Map<String, dynamic>> getDeviceInfo() async {
     'isTensorSoC': socFamily == SocFamily.googleTensor ? 1.0 : 0.0,
     'socFamily': socFamily.index,
     'socHardware': hardware,
+    'gpuName': gpuName,
+    'gpuVramGB': gpuVramGB,
+    'deviceType': deviceType,
   };
 }
