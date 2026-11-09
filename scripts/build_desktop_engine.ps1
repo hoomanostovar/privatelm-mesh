@@ -1,4 +1,4 @@
-﻿# Build script for Windows Desktop (llama.cpp + ggml-rpc-server)
+# Build script for Windows Desktop (llama.cpp + ggml-rpc-server)
 # Usage: .\scripts\build_desktop_engine.ps1 [-Cuda] [-Vulkan]
 
 param (
