@@ -1,0 +1,38 @@
+[package]
+name = "privatelm-mesh-daemon"
+version = "0.1.0"
+edition = "2021"
+authors = ["Hooman Ostovar", "PrivateLM Contributors"]
+description = "High-performance distributed cluster daemon and worker engine for PrivateLM-Mesh"
+license = "MIT"
+
+[dependencies]
+# Async Runtime & Networking
+tokio = { version = "1.38", features = ["full"] }
+tokio-stream = "0.1"
+
+# CLI & Configuration
+clap = { version = "4.5", features = ["derive", "env"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Peer Discovery & Local Network (mDNS/DNS-SD)
+mdns-sd = "0.11"
+local-ip-address = "0.6"
+
+# System Telemetry & Hardware Info
+sysinfo = "0.30"
+
+# Logging & Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# HTTP / WebSocket Control Server (for Flutter Desktop interop)
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.5", features = ["cors"] }
+
+# Utility
+uuid = { version = "1.8", features = ["v4"] }
+anyhow = "1.0"
+thiserror = "1.0"
