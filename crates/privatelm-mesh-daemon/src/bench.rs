@@ -95,3 +95,4 @@ pub async fn probe_endpoint_latency(endpoint: &str) -> Option<f64> {
         _ => None,
     }
 }
+

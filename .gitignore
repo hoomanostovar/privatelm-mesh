@@ -96,6 +96,8 @@ Cargo.lock
 # CMake / Native build
 **/build/
 **/bin/
+build_desktop/
+release_dist/
 **/*.exe
 **/*.dll
 **/*.so

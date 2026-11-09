@@ -157,3 +157,4 @@ impl DiscoveryManager {
         self.discovered_workers.read().await.values().cloned().collect()
     }
 }
+

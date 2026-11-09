@@ -6,12 +6,18 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-LLAMA_SRC="$ROOT_DIR/local_plugins/llama_flutter_android/android/src/main/cpp/llama.cpp"
-BUILD_DIR="$ROOT_DIR/build_desktop"
+BUILD_DIR="$ROOT_DIR/build_desktop/build"
 BIN_DIR="$ROOT_DIR/bin"
+UPSTREAM_SRC="$ROOT_DIR/build_desktop/llama_cpp_upstream"
 
 mkdir -p "$BUILD_DIR"
 mkdir -p "$BIN_DIR"
+
+if [ ! -f "$UPSTREAM_SRC/CMakeLists.txt" ]; then
+  echo "[+] Fetching full upstream llama.cpp..."
+  git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$UPSTREAM_SRC"
+fi
+LLAMA_SRC="$UPSTREAM_SRC"
 
 echo "=========================================================="
 echo " Building PrivateLM-Mesh Desktop Engine (Unix/macOS)      "
@@ -43,12 +49,22 @@ else
 fi
 
 cmake "${CMAKE_ARGS[@]}"
-cmake --build "$BUILD_DIR" --target rpc-server -j "$(getconf _NPROCESSORS_ONLN || nproc || sysctl -n hw.ncpu || echo 4)"
+cmake --build "$BUILD_DIR" --target ggml-rpc-server -j "$(getconf _NPROCESSORS_ONLN || nproc || sysctl -n hw.ncpu || echo 4)"
 
-if [ -f "$BUILD_DIR/bin/rpc-server" ]; then
-  cp "$BUILD_DIR/bin/rpc-server" "$BIN_DIR/rpc-server"
-  chmod +x "$BIN_DIR/rpc-server"
+CANDIDATE=""
+for path in "$BUILD_DIR/bin/ggml-rpc-server" "$BUILD_DIR/bin/rpc-server" "$BUILD_DIR/bin/Release/ggml-rpc-server" "$BUILD_DIR/bin/Release/rpc-server"; do
+  if [ -f "$path" ]; then
+    CANDIDATE="$path"
+    break
+  fi
+done
+
+if [ -n "$CANDIDATE" ]; then
+  cp "$CANDIDATE" "$BIN_DIR/rpc-server"
+  cp "$CANDIDATE" "$BIN_DIR/ggml-rpc-server"
+  chmod +x "$BIN_DIR/rpc-server" "$BIN_DIR/ggml-rpc-server"
   echo "[✓] Successfully built: $BIN_DIR/rpc-server"
 else
   echo "[!] Could not locate built rpc-server in $BUILD_DIR/bin"
 fi
+

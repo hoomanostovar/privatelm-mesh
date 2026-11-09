@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:llama_flutter_android/llama_flutter_android.dart';
@@ -44,7 +46,7 @@ class _ClusterViewState extends State<ClusterView> {
     final t = AppTokens.of(context);
     return Scaffold(
       backgroundColor: t.bg,
-      appBar: appScreenBar(context, title: 'Phone cluster', showBack: true),
+      appBar: appScreenBar(context, title: 'Device Cluster', showBack: true),
       body: Obx(() {
         final role = cluster.role;
         return ListView(
@@ -83,13 +85,12 @@ class _ClusterViewState extends State<ClusterView> {
   List<Widget> _offSection() => [
         AppNotice(
           ClusterService.canBeMaster
-              ? 'Run models too big for one phone by sharing the work across '
-                  'phones on the same Wi-Fi.\n\n'
-                  'Master: the phone you chat on. It runs the model.\n'
-                  'Worker: a phone that lends its memory to the master.'
-              : 'Help an Android phone running PrivateLM run models too big for '
-                  'it alone: choose Worker, then scan this device\'s QR code '
-                  'from that phone.',
+              ? 'Run models too big for one computer or phone by pooling memory '
+                  'and compute across PCs, Macs, Linux servers, and phones on your LAN.\n\n'
+                  'Master: the device you chat on. Coordinates and evaluates the model.\n'
+                  'Worker: a device that lends its GPU and RAM to the master.'
+              : 'Lend this device\'s GPU and RAM to a master coordinator: '
+                  'choose Worker, then pair it with your coordinator device.',
           icon: Icons.hub_outlined,
         ),
       ];
@@ -193,33 +194,64 @@ class _ClusterViewState extends State<ClusterView> {
 
   // ── Master ─────────────────────────────────────────────────────────────
 
+  static IconData _nodeIcon(ClusterWorker w) {
+    final s = '${w.name} ${w.model ?? ''}'.toLowerCase();
+    if (s.contains('pc') ||
+        s.contains('desktop') ||
+        s.contains('windows') ||
+        s.contains('win')) {
+      return Icons.desktop_windows_rounded;
+    }
+    if (s.contains('mac') ||
+        s.contains('macbook') ||
+        s.contains('apple')) {
+      return Icons.laptop_mac_rounded;
+    }
+    if (s.contains('linux') ||
+        s.contains('ubuntu') ||
+        s.contains('server')) {
+      return Icons.terminal_rounded;
+    }
+    return Icons.smartphone_rounded;
+  }
+
   List<Widget> _masterSection(BuildContext context) {
     final t = AppTokens.of(context);
+    final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
     return [
       if (cluster.split.length > 1) ...[
         _SplitCard(shares: cluster.split),
         const SizedBox(height: 16),
       ],
-      PrimaryButton(
-        label: 'Scan a worker\'s QR code',
-        icon: Icons.qr_code_scanner_rounded,
-        onPressed: _scanQr,
-      ),
+      if (isMobile)
+        PrimaryButton(
+          label: 'Scan a worker\'s QR code',
+          icon: Icons.qr_code_scanner_rounded,
+          onPressed: _scanQr,
+        )
+      else
+        PrimaryButton(
+          label: cluster.isScanning.value
+              ? 'Searching LAN for workers…'
+              : 'Find nearby workers (LAN)',
+          icon: Icons.wifi_find_rounded,
+          onPressed: cluster.isScanning.value ? null : cluster.scanNearby,
+        ),
       SectionHeader('Workers (${cluster.workers.length})'),
       if (cluster.workers.isEmpty)
         const AppGroup(children: [
           EmptyState(
             icon: Icons.devices_other_rounded,
             title: 'No workers yet',
-            message: 'On each other phone, open Phone cluster, choose Worker, '
-                'then scan the QR code it shows.',
+            message: 'On each other phone or computer, open Device Cluster, '
+                'choose Worker, or run privatelm-mesh-daemon.',
           ),
         ])
       else
         AppGroup(dividerIndent: 60, children: [
           for (final w in cluster.workers)
             AppRow(
-              icon: Icons.smartphone_rounded,
+              icon: _nodeIcon(w),
               title: w.model ?? w.name,
               subtitle: [
                 w.endpoint,
@@ -235,17 +267,24 @@ class _ClusterViewState extends State<ClusterView> {
         ]),
       const SectionFootnote(
         'Used the next time you load a GGUF model. If the model fits on this '
-        'phone you can keep it here, which is faster. If it doesn\'t, the '
-        'fastest phones get the biggest share and phones that aren\'t needed '
+        'device you can keep it here, which is faster. If it doesn\'t, the '
+        'fastest devices get the biggest share and devices that aren\'t needed '
         'are left out.',
       ),
       const SectionHeader('Other ways to add'),
       Row(children: [
-        PillButton(
-          label: cluster.isScanning.value ? 'Searching…' : 'Find nearby',
-          icon: Icons.wifi_find_rounded,
-          onPressed: cluster.isScanning.value ? null : cluster.scanNearby,
-        ),
+        if (isMobile)
+          PillButton(
+            label: cluster.isScanning.value ? 'Searching…' : 'Find nearby',
+            icon: Icons.wifi_find_rounded,
+            onPressed: cluster.isScanning.value ? null : cluster.scanNearby,
+          )
+        else
+          PillButton(
+            label: 'Scan QR code',
+            icon: Icons.qr_code_scanner_rounded,
+            onPressed: _scanQr,
+          ),
         const SizedBox(width: 10),
         PillButton(
           label: 'Enter IP',
@@ -258,7 +297,7 @@ class _ClusterViewState extends State<ClusterView> {
         AppGroup(dividerIndent: 60, children: [
           for (final w in cluster.found)
             AppRow(
-              icon: Icons.smartphone_rounded,
+              icon: _nodeIcon(w),
               title: w.model ?? w.name,
               subtitle: w.endpoint,
               trailing: PillButton(

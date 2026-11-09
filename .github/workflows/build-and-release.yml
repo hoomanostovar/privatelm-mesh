@@ -1,0 +1,271 @@
+name: Build & Release Multiplatform Mesh
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # -------------------------------------------------------------
+  # 1. RUST DAEMON (Windows, Linux, macOS)
+  # -------------------------------------------------------------
+  build-rust-daemon:
+    name: Build Rust Daemon (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: privatelm-mesh-daemon.exe
+            asset: privatelm-mesh-daemon-windows-x64.zip
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin: privatelm-mesh-daemon
+            asset: privatelm-mesh-daemon-linux-x64.tar.gz
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            bin: privatelm-mesh-daemon
+            asset: privatelm-mesh-daemon-macos-x64.tar.gz
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Rust Mesh Daemon
+        shell: bash
+        run: |
+          cd crates/privatelm-mesh-daemon
+          cargo build --release
+
+      - name: Package Rust Daemon Binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "crates/privatelm-mesh-daemon/target/release/${{ matrix.bin }}" -DestinationPath "${{ matrix.asset }}"
+
+      - name: Package Rust Daemon Binary (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          tar -czvf "${{ matrix.asset }}" -C crates/privatelm-mesh-daemon/target/release "${{ matrix.bin }}"
+
+      - name: Upload Rust Daemon Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  # -------------------------------------------------------------
+  # 2. FLUTTER CLIENTS (Windows, Linux, macOS)
+  # -------------------------------------------------------------
+  build-flutter-windows:
+    name: Build Flutter Client (Windows x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Setup NuGet
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:LOCALAPPDATA\Microsoft\WindowsApps"
+          Invoke-WebRequest -Uri "https://dist.nuget.org/win-x86-commandline/latest/nuget.exe" -OutFile "$env:LOCALAPPDATA\Microsoft\WindowsApps\nuget.exe"
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Windows Desktop Release
+        run: flutter build windows --release
+
+      - name: Package Windows Bundle
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "build\windows\x64\runner\Release\*" -DestinationPath "PrivateLM-Mesh-Windows-x64.zip"
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrivateLM-Mesh-Windows-x64.zip
+          path: PrivateLM-Mesh-Windows-x64.zip
+
+  build-flutter-linux:
+    name: Build Flutter Client (Linux x64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Linux Desktop Release
+        run: flutter build linux --release
+
+      - name: Package Linux Bundle
+        run: |
+          tar -czvf PrivateLM-Mesh-Linux-x64.tar.gz -C build/linux/x64/release/bundle .
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrivateLM-Mesh-Linux-x64.tar.gz
+          path: PrivateLM-Mesh-Linux-x64.tar.gz
+
+  build-flutter-macos:
+    name: Build Flutter Client (macOS)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build macOS Desktop Release
+        run: flutter build macos --release
+
+      - name: Package macOS App Bundle
+        run: |
+          cd build/macos/Build/Products/Release
+          zip -r ../../../../PrivateLM-Mesh-macOS.zip privatelm.app
+          cd ../../../..
+
+      - name: Upload macOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrivateLM-Mesh-macOS.zip
+          path: PrivateLM-Mesh-macOS.zip
+
+  build-flutter-android:
+    name: Build Flutter Client (Android APK)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Android Release APK
+        run: flutter build apk --release
+
+      - name: Package APK
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk PrivateLM-Mesh-Android.apk
+
+      - name: Upload Android Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrivateLM-Mesh-Android.apk
+          path: PrivateLM-Mesh-Android.apk
+
+  # -------------------------------------------------------------
+  # 3. LLAMA.CPP RPC-SERVER (Linux & macOS)
+  # -------------------------------------------------------------
+  build-rpc-servers:
+    name: Build RPC-Server (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: rpc-server-linux-x64.tar.gz
+          - os: macos-latest
+            asset: rpc-server-macos.tar.gz
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build rpc-server with CMake
+        shell: bash
+        run: |
+          chmod +x ./scripts/build_desktop_engine.sh
+          ./scripts/build_desktop_engine.sh
+
+      - name: Package rpc-server binary
+        shell: bash
+        run: |
+          tar -czvf "${{ matrix.asset }}" -C bin rpc-server
+
+      - name: Upload rpc-server Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  # -------------------------------------------------------------
+  # 4. PUBLISH RELEASE ASSETS
+  # -------------------------------------------------------------
+  release:
+    name: Publish GitHub Release
+    needs:
+      - build-rust-daemon
+      - build-flutter-windows
+      - build-flutter-linux
+      - build-flutter-macos
+      - build-flutter-android
+      - build-rpc-servers
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all workflow artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release_assets
+          merge-multiple: true
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release_assets/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
