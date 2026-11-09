@@ -174,9 +174,7 @@ jobs:
 
       - name: Package macOS App Bundle
         run: |
-          cd build/macos/Build/Products/Release
-          zip -r ../../../../PrivateLM-Mesh-macOS.zip privatelm.app
-          cd ../../../..
+          (cd build/macos/Build/Products/Release && zip -r "${GITHUB_WORKSPACE}/PrivateLM-Mesh-macOS.zip" privatelm.app)
 
       - name: Upload macOS Artifact
         uses: actions/upload-artifact@v4
@@ -191,6 +189,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup Java
         uses: actions/setup-java@v4
