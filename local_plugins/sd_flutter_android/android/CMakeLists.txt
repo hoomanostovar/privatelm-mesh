@@ -35,7 +35,11 @@ set(GGML_OPENMP ON CACHE BOOL "Enable OpenMP for CPU parallelization")
 # Add stable-diffusion.cpp
 set(SD_BUILD_EXAMPLES OFF CACHE BOOL "Disable SD examples")
 set(SD_BUILD_SHARED_LIBS OFF CACHE BOOL "Build SD as static")
-add_subdirectory(src/main/cpp/stable-diffusion.cpp)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/stable-diffusion.cpp/CMakeLists.txt")
+    add_subdirectory(src/main/cpp/stable-diffusion.cpp)
+else()
+    message(WARNING "src/main/cpp/stable-diffusion.cpp not found; skipping stable-diffusion.cpp compilation")
+endif()
 
 # ggml-base is linked as a standalone shared object and contains C++ sources.
 # On Android/NDK it must explicitly link libc++ or symbols such as operator new
