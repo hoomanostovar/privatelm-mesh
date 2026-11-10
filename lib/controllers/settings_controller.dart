@@ -55,7 +55,7 @@ class SettingsController extends GetxController {
   final globalSystemPrompt = AppConstants.systemPrompt.obs;
   final nvidiaModels = <String>[].obs;
   final isLoadingNvidiaModels = false.obs;
-  final temperature = 0.1.obs;
+  final temperature = AppConstants.defaultTemperature.obs;
   final maxTokens = 512.obs;
   final contextSize = 2048.obs;
   final liteRtPerformanceMode = AppConstants.defaultLiteRtPerformanceMode.obs;
@@ -68,7 +68,7 @@ class SettingsController extends GetxController {
   final imageGenSize = AppConstants.defaultImageGenSize.obs;
   final fontScale = AppConstants.defaultFontScale.obs;
   final hapticsEnabled = true.obs;
-  final appVersion = '1.1.1'.obs;
+  final appVersion = '1.1.2'.obs;
 
   // Persistent text controllers for settings fields
   final openaiKeyController = TextEditingController();

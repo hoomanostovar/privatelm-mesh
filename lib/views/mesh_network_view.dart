@@ -273,7 +273,8 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
         MeshRadarScanner(
           onlineCount: totalNodes,
           onScanTap: () {
-            mesh.broadcastPresence();
+            cluster.refreshWifiAddress();
+            mesh.broadcastPresence(forceUnicastSweep: true);
             cluster.scanNearby();
             Haptics.lightImpact();
           },

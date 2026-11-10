@@ -4,8 +4,10 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' show IconData, Icons;
 import 'package:get/get.dart';
+import 'package:llama_flutter_android/llama_flutter_android.dart';
 import '../models/hardware_acceleration.dart';
 import '../models/transport_type.dart';
+import 'cluster_service.dart';
 import 'device_info_service.dart';
 import 'inference_service.dart';
 import 'mesh_telemetry_service.dart';
@@ -174,6 +176,7 @@ class MeshDiscoveryService extends GetxService {
   RawDatagramSocket? _socket;
   Timer? _beaconTimer;
   Timer? _pruneTimer;
+  int _beaconTickCount = 0;
 
   String? _localNodeId;
   String get localNodeId => _localNodeId ??= 'node_${Platform.operatingSystem}_${DateTime.now().millisecondsSinceEpoch % 100000}';
@@ -233,6 +236,10 @@ class MeshDiscoveryService extends GetxService {
 
   Future<void> _startDiscovery() async {
     try {
+      if (!kIsWeb && Platform.isAndroid) {
+        // Ensure Android MulticastLock is acquired immediately on startup
+        unawaited(LlamaCluster.localWifiIp());
+      }
       _socket = await RawDatagramSocket.bind(
         InternetAddress.anyIPv4,
         beaconPort,
@@ -243,22 +250,25 @@ class MeshDiscoveryService extends GetxService {
 
       _socket?.listen((event) {
         if (event == RawSocketEvent.read) {
-          final dg = _socket?.receive();
-          if (dg != null) {
-            _handlePacket(dg);
+          Datagram? dg;
+          while ((dg = _socket?.receive()) != null) {
+            _handlePacket(dg!);
           }
         }
       });
 
       // Periodic broadcast beacon (every 4 seconds)
-      _beaconTimer = Timer.periodic(const Duration(seconds: 4), (_) => broadcastPresence());
-      broadcastPresence();
+      _beaconTimer = Timer.periodic(
+        const Duration(seconds: 4),
+        (_) => broadcastPresence(),
+      );
+      unawaited(broadcastPresence(forceUnicastSweep: true));
 
-      // Prune inactive nodes (timeout after 12 seconds of no heartbeats)
+      // Prune inactive nodes (timeout after 20 seconds of no heartbeats)
       _pruneTimer = Timer.periodic(const Duration(seconds: 5), (_) {
         final now = DateTime.now();
         onlineNodes.removeWhere((id, node) {
-          return id != localNodeId && now.difference(node.lastSeen).inSeconds > 12;
+          return id != localNodeId && now.difference(node.lastSeen).inSeconds > 20;
         });
       });
     } catch (e) {
@@ -266,10 +276,39 @@ class MeshDiscoveryService extends GetxService {
     }
   }
 
-  /// Sends a presence beacon announcing this node's hardware and availability.
-  Future<void> broadcastPresence() async {
-    if (_socket == null) return;
+  /// Collects all local IPv4 addresses across all interfaces, including
+  /// Android's ConnectivityManager/WifiManager fallback when SELinux blocks
+  /// getifaddrs() on Android 11+.
+  Future<List<String>> _getLocalIpv4Addresses() async {
+    final ips = <String>{};
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        final androidIp = await LlamaCluster.localWifiIp();
+        if (androidIp != null && androidIp.isNotEmpty && !androidIp.startsWith('127.')) {
+          ips.add(androidIp);
+        }
+      } catch (_) {}
+    }
+    try {
+      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          if (!addr.isLoopback && !addr.address.startsWith('127.') && !addr.address.startsWith('169.254.')) {
+            ips.add(addr.address);
+          }
+        }
+      }
+    } catch (_) {}
+    if (Get.isRegistered<ClusterService>()) {
+      final wifiIp = Get.find<ClusterService>().wifiAddress.value;
+      if (wifiIp != null && wifiIp.isNotEmpty && !wifiIp.startsWith('127.')) {
+        ips.add(wifiIp);
+      }
+    }
+    return ips.toList();
+  }
 
+  Map<String, dynamic> _buildBeaconMap({bool isReply = false}) {
     final dev = Get.isRegistered<DeviceInfoService>() ? Get.find<DeviceInfoService>() : null;
     final inf = Get.isRegistered<InferenceService>() ? Get.find<InferenceService>() : null;
     final telem = Get.isRegistered<MeshTelemetryService>() ? Get.find<MeshTelemetryService>() : null;
@@ -280,20 +319,9 @@ class MeshDiscoveryService extends GetxService {
     final freeRam = dev?.availableRamGB.value ?? 4.0;
     final deviceType = dev?.deviceNoun ?? 'Device';
     final activeModel = inf?.loadedModelName.value ?? '';
+    final isDesktop = !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
 
-    String localTransport = 'wifi';
-    try {
-      final ifaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
-      for (final iface in ifaces) {
-        final name = iface.name.toLowerCase();
-        if (name.contains('ethernet') || name.startsWith('eth') || name.startsWith('enp')) {
-          localTransport = 'ethernet';
-          break;
-        }
-      }
-    } catch (_) {}
-
-    final payload = jsonEncode({
+    return {
       'id': localNodeId,
       'name': '${Platform.localHostname} (${dev?.deviceNoun ?? "Node"})',
       'port': 50052,
@@ -302,7 +330,7 @@ class MeshDiscoveryService extends GetxService {
       'gpuVramGB': gpuVram,
       'totalRamGB': totalRam,
       'freeRamGB': freeRam,
-      'transportType': localTransport,
+      'transportType': isDesktop ? 'ethernet' : 'wifi',
       'hardwareBackend': dev?.recommendedBackend.displayName ?? 'Auto',
       'status': telem?.localStatus.value ?? 'ready',
       'activeModel': activeModel,
@@ -311,31 +339,76 @@ class MeshDiscoveryService extends GetxService {
       'tokensGenerated': telem?.localTokensGenerated.value ?? 0,
       'tokensPerSec': telem?.localTokensPerSecond.value ?? 0.0,
       'wattage': telem?.localWattage.value ?? 15.0,
-    });
+      if (isReply) 'isReply': true,
+    };
+  }
 
+  /// Sends a presence beacon announcing this node's hardware and availability.
+  Future<void> broadcastPresence({bool forceUnicastSweep = false}) async {
+    if (_socket == null) return;
+    _beaconTickCount++;
+
+    final payload = jsonEncode(_buildBeaconMap(isReply: false));
     final message = '$magicHeader$payload';
     final data = utf8.encode(message);
 
-    // Broadcast on general 255.255.255.255
+    // 1. Broadcast on general 255.255.255.255
     try {
       _socket?.send(data, InternetAddress('255.255.255.255'), beaconPort);
     } catch (_) {}
 
-    // Also send on interface broadcast addresses
-    try {
-      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
-      for (final iface in interfaces) {
-        for (final addr in iface.addresses) {
-          final parts = addr.address.split('.');
-          if (parts.length == 4) {
-            final bcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
-            try {
-              _socket?.send(data, InternetAddress(bcast), beaconPort);
-            } catch (_) {}
-          }
+    // 2. Gather local IPv4 addresses (including Android ConnectivityManager IP)
+    final localIps = await _getLocalIpv4Addresses();
+    final prefixes = <String>{};
+
+    for (final ip in localIps) {
+      final parts = ip.split('.');
+      if (parts.length == 4) {
+        final prefix = '${parts[0]}.${parts[1]}.${parts[2]}';
+        prefixes.add(prefix);
+        final bcast = '$prefix.255';
+        try {
+          _socket?.send(data, InternetAddress(bcast), beaconPort);
+        } catch (_) {}
+      }
+    }
+
+    // 3. Direct unicast keep-alive to already-discovered mesh nodes and cluster workers
+    final knownHosts = <String>{
+      for (final node in onlineNodes.values)
+        if (node.id != localNodeId && node.host.isNotEmpty) node.host,
+      if (Get.isRegistered<ClusterService>())
+        for (final w in Get.find<ClusterService>().workers)
+          if (w.host.isNotEmpty) w.host,
+    };
+    for (final host in knownHosts) {
+      try {
+        _socket?.send(data, InternetAddress(host), beaconPort);
+      } catch (_) {}
+    }
+
+    // 4. Unicast UDP /24 subnet sweep every 2nd tick (8s) or on demand.
+    // Many routers drop UDP broadcast (.255) between Wired Ethernet (PCs) and
+    // Wi-Fi (Phones), and some Android Wi-Fi power-save states filter broadcast,
+    // whereas direct unicast UDP datagrams pass straight through the bridge.
+    final shouldSweep = forceUnicastSweep || (_beaconTickCount % 2 == 1);
+    if (shouldSweep && prefixes.isNotEmpty) {
+      for (final prefix in prefixes) {
+        // Only sweep private LAN subnets (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+        if (!prefix.startsWith('192.168.') &&
+            !prefix.startsWith('10.') &&
+            !prefix.startsWith('172.')) {
+          continue;
+        }
+        for (var hostId = 1; hostId <= 254; hostId++) {
+          final targetIp = '$prefix.$hostId';
+          if (localIps.contains(targetIp)) continue;
+          try {
+            _socket?.send(data, InternetAddress(targetIp), beaconPort);
+          } catch (_) {}
         }
       }
-    } catch (_) {}
+    }
   }
 
   void _handlePacket(Datagram dg) {
@@ -351,7 +424,20 @@ class MeshDiscoveryService extends GetxService {
       // Ignore our own loopback UDP broadcast packets so local telemetry is never double-counted
       if (node.id == localNodeId) return;
 
+      final isFirstSeen = !onlineNodes.containsKey(node.id);
       onlineNodes[node.id] = node;
+
+      // Immediately send a direct unicast reply back to the sender if this wasn't
+      // already a reply (or if we just discovered this peer for the first time).
+      // This guarantees two-way visibility between PC and Phone as soon as a
+      // single packet crosses the network in either direction.
+      if (json['isReply'] != true || isFirstSeen) {
+        try {
+          final replyPayload = jsonEncode(_buildBeaconMap(isReply: true));
+          final replyBytes = utf8.encode('$magicHeader$replyPayload');
+          _socket?.send(replyBytes, dg.address, beaconPort);
+        } catch (_) {}
+      }
 
       if (Get.isRegistered<MeshTelemetryService>()) {
         Get.find<MeshTelemetryService>().updatePeerTelemetry(

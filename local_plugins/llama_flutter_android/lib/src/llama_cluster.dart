@@ -267,6 +267,19 @@ class LlamaCluster {
     }
   }
 
+  /// Android: resolves the device's LAN IPv4 address via ConnectivityManager /
+  /// WifiManager (bypasses Android 11+ SELinux restrictions on getifaddrs) and
+  /// ensures WifiManager.MulticastLock is held for UDP mesh discovery.
+  static Future<String?> localWifiIp() async {
+    try {
+      return await _channel.invokeMethod<String>('localWifiIp');
+    } on MissingPluginException {
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// This device's memory read speed in GB/s (~0.2 s to measure).
   static Future<double> benchmark() async {
     try {

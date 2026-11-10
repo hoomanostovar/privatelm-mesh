@@ -1,6 +1,6 @@
 [package]
 name = "privatelm-mesh-daemon"
-version = "1.1.1"
+version = "1.1.2"
 edition = "2021"
 authors = ["Hooman Ostovar", "PrivateLM Contributors"]
 description = "High-performance distributed cluster daemon and worker engine for PrivateLM-Mesh"

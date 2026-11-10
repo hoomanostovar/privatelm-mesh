@@ -6,6 +6,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.ServiceConnection
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
@@ -21,7 +23,9 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import kotlinx.coroutines.*
+import java.net.Inet4Address
 import java.net.InetSocketAddress
+import java.net.NetworkInterface
 import java.net.Socket
 import kotlin.coroutines.resume
 
@@ -58,13 +62,35 @@ class ClusterChannel(
         override fun onServiceDisconnected(name: ComponentName?) {}
     }
 
+    private var multicastLock: WifiManager.MulticastLock? = null
+
     init {
         channel.setMethodCallHandler(this)
+        acquireMulticastLock()
         context.bindService(
             Intent(context, ClusterWorkerService::class.java),
             workerPriority,
             Context.BIND_IMPORTANT
         )
+    }
+
+    /**
+     * Android Wi-Fi hardware filters drop incoming UDP broadcast/multicast
+     * packets (such as PrivateLM Mesh discovery beacons on port 50053) unless
+     * a MulticastLock is held.
+     */
+    private fun acquireMulticastLock() {
+        runCatching {
+            val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            if (wifi != null && multicastLock == null) {
+                multicastLock = wifi.createMulticastLock("PrivateLM:MeshDiscovery").apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+            }
+        }.onFailure {
+            Log.w(TAG, "Could not acquire MulticastLock", it)
+        }
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -103,6 +129,10 @@ class ClusterChannel(
                 ))
             }
             "localFreeRamMb" -> result.success(ClusterWorkerService.availableRamMb(context))
+            "localWifiIp" -> {
+                acquireMulticastLock()
+                result.success(resolveLocalWifiIpv4())
+            }
             "setKeepScreenOn" -> {
                 // A worker is only at full speed while PrivateLM is on screen
                 // (it borrows the app's priority), so keep the screen on.
@@ -207,7 +237,83 @@ class ClusterChannel(
     fun dispose() {
         runCatching { context.unbindService(workerPriority) }
         setLowLatencyWifi(false)
+        runCatching {
+            multicastLock?.takeIf { it.isHeld }?.release()
+            multicastLock = null
+        }
         channel.setMethodCallHandler(null)
+    }
+
+    /**
+     * Resolves the device's LAN IPv4 address using Android's ConnectivityManager
+     * and WifiManager APIs, which work on Android 11+ where SELinux blocks
+     * Dart's NetworkInterface.list() (netlink getifaddrs).
+     */
+    private fun resolveLocalWifiIpv4(): String? {
+        // 1. ConnectivityManager LinkProperties (preferred on Android 10+)
+        runCatching {
+            val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            if (cm != null) {
+                val networks = mutableListOf<android.net.Network>()
+                cm.activeNetwork?.let { networks.add(it) }
+                @Suppress("DEPRECATION")
+                cm.allNetworks.forEach { if (!networks.contains(it)) networks.add(it) }
+                for (net in networks) {
+                    val caps = cm.getNetworkCapabilities(net)
+                    val isLan = caps == null ||
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                    if (!isLan) continue
+                    val props = cm.getLinkProperties(net) ?: continue
+                    for (linkAddr in props.linkAddresses) {
+                        val addr = linkAddr.address
+                        if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                            val host = addr.hostAddress ?: continue
+                            if (host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.")) {
+                                return host
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. WifiManager.connectionInfo fallback
+        runCatching {
+            val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            @Suppress("DEPRECATION")
+            val ipInt = wifi?.connectionInfo?.ipAddress ?: 0
+            if (ipInt != 0) {
+                val ip = String.format(
+                    java.util.Locale.US,
+                    "%d.%d.%d.%d",
+                    ipInt and 0xff,
+                    ipInt shr 8 and 0xff,
+                    ipInt shr 16 and 0xff,
+                    ipInt shr 24 and 0xff
+                )
+                if (ip != "0.0.0.0" && !ip.startsWith("127.")) {
+                    return ip
+                }
+            }
+        }
+
+        // 3. Java NetworkInterface fallback
+        runCatching {
+            val ifaces = NetworkInterface.getNetworkInterfaces() ?: return null
+            for (iface in ifaces) {
+                if (!iface.isUp || iface.isLoopback) continue
+                for (addr in iface.inetAddresses) {
+                    if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                        val host = addr.hostAddress ?: continue
+                        if (host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.")) {
+                            return host
+                        }
+                    }
+                }
+            }
+        }
+        return null
     }
 
     private fun isBatteryUnrestricted(): Boolean {

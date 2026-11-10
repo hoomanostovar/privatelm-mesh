@@ -255,6 +255,13 @@ class ClusterService extends GetxService {
   /// (wlan* on Android/Linux, en0 on iOS/macOS, Wi-Fi or Ethernet on Windows).
   Future<void> refreshWifiAddress() async {
     try {
+      if (!kIsWeb && Platform.isAndroid) {
+        final androidIp = await LlamaCluster.localWifiIp();
+        if (androidIp != null && androidIp.isNotEmpty) {
+          wifiAddress.value = androidIp;
+          return;
+        }
+      }
       final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
       final preferred = interfaces.where((i) {
         final n = i.name.toLowerCase();

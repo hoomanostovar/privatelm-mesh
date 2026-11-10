@@ -76,8 +76,11 @@ static bool g_rpc_backend_loaded = false;
 // Best first. The armv9 (SVE2/SME) variants are deliberately excluded: on a
 // Pixel 8 (Tensor G3) the SVE2 repack path produced out-of-range values and
 // aborted on the first decode, so they aren't shipped or loaded.
+// Likewise, android_armv8.2_2 (dotprod + fp16) is prioritized ahead of
+// android_armv8.6_1 (+i8mm) because the i8mm int8 repack path corrupts
+// Gemma Q4_0/Q4_K_M activations across big.LITTLE cores on several SoCs.
 static const char* const kCpuVariants[] = {
-    "android_armv8.6_1", "android_armv8.2_2", "android_armv8.2_1",
+    "android_armv8.2_2", "android_armv8.2_1", "android_armv8.6_1",
     "android_armv8.0_1",
 };
 
@@ -768,6 +771,19 @@ Java_com_write4me_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadMo
 
     ensureCpuBackend();
 
+    // Gemma 2/3/4 models use unscaled RMSNorm (1 + w), large GeGLU intermediate
+    // activations (> 65504), and attention logit softcapping, which overflow
+    // FP16 shaders to NaN on mobile Vulkan drivers (Adreno / Mali / Xclipse),
+    // causing top-k heapsort on NaN logits to deterministically emit " CHILD".
+    std::string lower_model_path(model_path ? model_path : "");
+    std::transform(lower_model_path.begin(), lower_model_path.end(),
+                   lower_model_path.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (lower_model_path.find("gemma") != std::string::npos && n_gpu_layers > 0) {
+        LOGI("Gemma architecture detected on mobile: forcing CPU backend (n_gpu_layers=0) to prevent Vulkan FP16 NaN logit overflow");
+        n_gpu_layers = 0;
+    }
+
     // Model parameters
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = n_gpu_layers;
@@ -1061,10 +1077,18 @@ Java_com_write4me_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGenera
     std::string sanitized_prompt = sanitizeUTF8(prompt_str, prompt_len);
     const char* sanitized_cstr = sanitized_prompt.c_str();
     const int sanitized_len = sanitized_prompt.length();
+
+    // Avoid inserting a duplicate BOS token if the chat template already
+    // prepended an explicit BOS marker (e.g. "<bos>" on Gemma 2/3/4).
+    const bool has_explicit_bos =
+        sanitized_prompt.rfind("<bos>", 0) == 0 ||
+        sanitized_prompt.rfind("<s>", 0) == 0 ||
+        sanitized_prompt.rfind("<|begin_of_text|>", 0) == 0;
+    const bool add_special = !has_explicit_bos;
     
     // Tokenize prompt - when tokens is NULL, llama_tokenize returns NEGATIVE count
-    const int n_prompt_tokens = -llama_tokenize(g_vocab, sanitized_cstr, sanitized_len, nullptr, 0, true, true);
-    LOGI("Token count: %d", n_prompt_tokens);
+    const int n_prompt_tokens = -llama_tokenize(g_vocab, sanitized_cstr, sanitized_len, nullptr, 0, add_special, true);
+    LOGI("Token count: %d (add_special=%d)", n_prompt_tokens, add_special ? 1 : 0);
     
     if (n_prompt_tokens <= 0) {
         env->ReleaseStringUTFChars(prompt, prompt_str);
@@ -1076,7 +1100,7 @@ Java_com_write4me_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGenera
         return;
     }
     std::vector<llama_token> tokens(n_prompt_tokens);
-    const int actual_tokens = llama_tokenize(g_vocab, sanitized_cstr, sanitized_len, tokens.data(), tokens.size(), true, true);
+    const int actual_tokens = llama_tokenize(g_vocab, sanitized_cstr, sanitized_len, tokens.data(), tokens.size(), add_special, true);
     if (actual_tokens < 0) {
         env->ReleaseStringUTFChars(prompt, prompt_str);
         jclass exception = env->FindClass("java/lang/RuntimeException");
@@ -1168,53 +1192,50 @@ Java_com_write4me_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGenera
     // Add penalties first (applied to logits before sampling)
     if (repeat_penalty != 1.0f || frequency_penalty != 0.0f || presence_penalty != 0.0f) {
         llama_sampler_chain_add(g_sampler, llama_sampler_init_penalties(
-            llama_vocab_n_tokens(g_vocab),  // n_vocab
-            repeat_last_n,              // penalty_last_n
-            repeat_penalty,             // penalty_repeat
-            frequency_penalty,          // penalty_freq
-            presence_penalty            // penalty_present
+            llama_vocab_n_tokens(g_vocab),           // n_vocab
+            repeat_last_n > 0 ? repeat_last_n : 64,  // penalty_last_n
+            repeat_penalty,                          // penalty_repeat
+            frequency_penalty,                       // penalty_freq
+            presence_penalty                         // penalty_present
         ));
     }
-    
-    // Temperature sampling
-    llama_sampler_chain_add(g_sampler, llama_sampler_init_temp(temperature));
-    
-    // Add advanced samplers if enabled
+
+    // Add advanced samplers if enabled (in official llama.cpp order:
+    // penalties -> top_k -> typical_p -> top_p -> min_p -> temp -> dist/greedy)
     if (mirostat == 1) {
+        llama_sampler_chain_add(g_sampler, llama_sampler_init_temp(temperature));
         llama_sampler_chain_add(g_sampler, llama_sampler_init_mirostat(
-            llama_vocab_n_tokens(g_vocab),  // Use the vocab to get n_vocab
+            llama_vocab_n_tokens(g_vocab),
             sampler_seed,
             mirostat_tau,
             mirostat_eta,
-            100  // m parameter
+            100
         ));
     } else if (mirostat == 2) {
+        llama_sampler_chain_add(g_sampler, llama_sampler_init_temp(temperature));
         llama_sampler_chain_add(g_sampler, llama_sampler_init_mirostat_v2(
             sampler_seed,
             mirostat_tau,
             mirostat_eta
         ));
+    } else if (temperature <= 0.0f) {
+        llama_sampler_chain_add(g_sampler, llama_sampler_init_greedy());
     } else {
-        // Standard sampling chain (only if mirostat is disabled)
-        if (min_p > 0.0f && min_p < 1.0f) {
-            llama_sampler_chain_add(g_sampler, llama_sampler_init_min_p(min_p, 1));
-        }
-        
-        if (typical_p < 1.0f) {
-            llama_sampler_chain_add(g_sampler, llama_sampler_init_typical(typical_p, 1));
-        }
-        
         if (top_k > 0) {
             llama_sampler_chain_add(g_sampler, llama_sampler_init_top_k(top_k));
         }
-        
-        if (top_p < 1.0f) {
+        if (typical_p > 0.0f && typical_p < 1.0f) {
+            llama_sampler_chain_add(g_sampler, llama_sampler_init_typical(typical_p, 1));
+        }
+        if (top_p > 0.0f && top_p < 1.0f) {
             llama_sampler_chain_add(g_sampler, llama_sampler_init_top_p(top_p, 1));
         }
+        if (min_p > 0.0f && min_p < 1.0f) {
+            llama_sampler_chain_add(g_sampler, llama_sampler_init_min_p(min_p, 1));
+        }
+        llama_sampler_chain_add(g_sampler, llama_sampler_init_temp(temperature));
+        llama_sampler_chain_add(g_sampler, llama_sampler_init_dist(sampler_seed));
     }
-    
-    // Final distribution sampler
-    llama_sampler_chain_add(g_sampler, llama_sampler_init_dist(sampler_seed));
 
     // Get callback method
     jclass callbackClass = env->GetObjectClass(token_callback);
@@ -1222,13 +1243,44 @@ Java_com_write4me_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGenera
 
     // Generation loop
     LOGI("Starting generation loop: max_tokens=%lld", max_tokens);
+    llama_token last_token_id = -1;
+    int same_token_streak = 0;
+
     for (int i = 0; i < max_tokens && !g_stop_flag; i++) {
+        // Guard against NaN/Inf logits (e.g. from GPU FP16 overflow or driver bug)
+        const float* logits = llama_get_logits_ith(g_ctx, -1);
+        if (logits != nullptr && (std::isnan(logits[0]) || std::isinf(logits[0]))) {
+            LOGE("❌ NaN/Inf logits detected at step %d! Aborting generation to prevent repetition loop.", i);
+            if (g_token_callback != nullptr) {
+                env->DeleteGlobalRef(g_token_callback);
+                g_token_callback = nullptr;
+            }
+            llama_batch_free(batch);
+            env->DeleteLocalRef(callbackClass);
+            jclass exception = env->FindClass("java/lang/RuntimeException");
+            env->ThrowNew(exception, "NAN_LOGITS_DETECTED: Numerical overflow in model logits");
+            return;
+        }
+
         llama_token new_token_id = llama_sampler_sample(g_sampler, g_ctx, -1);
 
         // Check for end of generation (EOS/EOD tokens)
         if (llama_vocab_is_eog(g_vocab, new_token_id)) {
             LOGI("EOS token detected, ending generation.");
             break;
+        }
+
+        // Guard against degenerate single-token loops (e.g. "CHILD CHILD CHILD...")
+        if (new_token_id == last_token_id) {
+            same_token_streak++;
+            if (same_token_streak >= 6) {
+                LOGE("Degenerate single-token repetition detected (token=%d repeated %d times), stopping.",
+                     new_token_id, same_token_streak);
+                break;
+            }
+        } else {
+            last_token_id = new_token_id;
+            same_token_streak = 1;
         }
 
         // Decode token to string
@@ -1240,6 +1292,13 @@ Java_com_write4me_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGenera
             piece = sanitizeUTF8(buffer, length);
         } else {
             piece = "";
+        }
+
+        // Stop if a model emits an unflagged turn-end marker as plain text
+        if (piece == "<end_of_turn>" || piece == "<turn|>" || piece == "<eos>" ||
+            piece == "<|eot_id|>" || piece == "<|im_end|>") {
+            LOGI("Explicit turn-end token piece '%s' detected, ending generation.", piece.c_str());
+            break;
         }
         
         // Call Kotlin callback

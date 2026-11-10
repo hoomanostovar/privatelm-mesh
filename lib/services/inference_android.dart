@@ -177,6 +177,15 @@ class InferenceEngine {
       print('[Inference] GPU detection failed: $e — CPU fallback');
     }
 
+    final modelName = modelPath.toLowerCase();
+    final isGemmaModel = modelName.contains('gemma');
+
+    if (isGemmaModel && gpuLayers > 0) {
+      print(
+          '[Inference] Gemma architecture detected on mobile — using CPU backend to prevent mobile Vulkan FP16 NaN overflow ("CHILD" repetition loop)');
+      gpuLayers = 0;
+    }
+
     // ── Thread Tuning ──
     int threads;
     if (gpuLayers > 0) {
@@ -193,13 +202,15 @@ class InferenceEngine {
               : deviceTier == 'mid'
                   ? 4
                   : 3;
+      if (isGemmaModel && threads > 4) {
+        threads = 4;
+      }
     }
 
     // Google Tensor SoC (Pixel 6/7/8) has known Q4_K_M dequant bugs
     // that corrupt logits at >1 thread on Gemma models. Force single-threaded
     // to eliminate KV cache races in the quantization dot-product path.
-    final modelName = modelPath.toLowerCase();
-    if (isTensorSoC && modelName.contains('gemma')) {
+    if (isTensorSoC && isGemmaModel) {
       threads = 1;
       print(
           '[Inference] Tensor SoC + Gemma detected — forcing single-threaded inference');
@@ -262,7 +273,10 @@ class InferenceEngine {
 
     final tempDir = await getTemporaryDirectory();
     final cacheDir = Directory('${tempDir.path}/litert_cache');
-    final backend = forceCpu || performanceMode == 'cpu_safe'
+    final isGemmaModel = modelPath.toLowerCase().contains('gemma');
+    final backend = forceCpu ||
+            performanceMode == 'cpu_safe' ||
+            (isGemmaModel && performanceMode != 'gpu_fast')
         ? LiteLmBackend.cpu
         : LiteLmBackend.gpu;
     final backendLabel = backend == LiteLmBackend.gpu ? 'GPU' : 'CPU';
@@ -491,6 +505,8 @@ class InferenceEngine {
     }
 
     int tokenCount = 0;
+    String lastPieceNormalized = '';
+    int samePieceStreak = 0;
     _subscription = stream.listen(
       (token) {
         if (tokenCount == 0) {
@@ -506,6 +522,23 @@ class InferenceEngine {
         });
         final clean = _sanitizeGemmaGarbage(token);
         if (clean.isEmpty) return;
+
+        final norm = clean.trim();
+        if (norm.length >= 2) {
+          if (norm == lastPieceNormalized) {
+            samePieceStreak++;
+            if (samePieceStreak >= 5) {
+              print(
+                  '[Inference] Repetition guard triggered ("$norm" x$samePieceStreak) — stopping generation');
+              finish(buffer.toString());
+              return;
+            }
+          } else {
+            lastPieceNormalized = norm;
+            samePieceStreak = 1;
+          }
+        }
+
         buffer.write(clean);
         tokenCount++;
         onToken?.call(clean);
