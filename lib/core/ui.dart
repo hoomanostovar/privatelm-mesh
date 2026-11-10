@@ -50,13 +50,13 @@ class AppTokens {
     final d = Theme.of(context).brightness == Brightness.dark;
     return AppTokens._(
       isDark: d,
-      bg: d ? Colors.black : Colors.white,
+      bg: d ? const Color(0xFF090A0D) : Colors.white,
       text: d ? Colors.white : const Color(0xFF0B0B0C),
       muted: d ? const Color(0xFF8E8E93) : const Color(0xFF6E6E73),
       faint: d ? const Color(0xFF5A5A5F) : const Color(0xFFAEAEB2),
       accent: d ? const Color(0xFF0A84FF) : const Color(0xFF007AFF),
-      surface: d ? const Color(0xFF141416) : const Color(0xFFF5F5F7),
-      surfacePressed: d ? const Color(0xFF1E1E21) : const Color(0xFFEBEBED),
+      surface: d ? const Color(0xFF121318) : const Color(0xFFF5F5F7),
+      surfacePressed: d ? const Color(0xFF1A1B22) : const Color(0xFFEBEBED),
       fill: d
           ? Colors.white.withValues(alpha: 0.08)
           : Colors.black.withValues(alpha: 0.05),
@@ -64,7 +64,7 @@ class AppTokens {
           ? Colors.white.withValues(alpha: 0.14)
           : Colors.black.withValues(alpha: 0.10),
       hairline: d
-          ? Colors.white.withValues(alpha: 0.07)
+          ? Colors.white.withValues(alpha: 0.08)
           : Colors.black.withValues(alpha: 0.06),
       green: d ? const Color(0xFF30D158) : const Color(0xFF28A745),
       orange: d ? const Color(0xFFFF9F0A) : const Color(0xFFE08600),
@@ -220,6 +220,326 @@ class AppCard extends StatelessWidget {
         splashFactory: NoSplash.splashFactory,
         highlightColor: t.surfacePressed,
         child: Padding(padding: padding, child: child),
+      ),
+    );
+  }
+}
+
+/// 21st.dev inspired tactile press spring feedback.
+/// Smoothly scales down by 2% on touch and springs back up on release,
+/// providing physical affordance with zero frame drops.
+class InteractivePress extends StatefulWidget {
+  final Widget child;
+  final VoidCallback? onTap;
+  final double scaleFactor;
+  final BorderRadius? borderRadius;
+  const InteractivePress({
+    super.key,
+    required this.child,
+    this.onTap,
+    this.scaleFactor = 0.98,
+    this.borderRadius,
+  });
+
+  @override
+  State<InteractivePress> createState() => _InteractivePressState();
+}
+
+class _InteractivePressState extends State<InteractivePress> {
+  bool _isDown = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) => setState(() => _isDown = true),
+      onTapUp: (_) {
+        setState(() => _isDown = false);
+        if (widget.onTap != null) {
+          Haptics.selectionClick();
+          widget.onTap!();
+        }
+      },
+      onTapCancel: () => setState(() => _isDown = false),
+      child: AnimatedScale(
+        scale: _isDown ? widget.scaleFactor : 1.0,
+        duration: const Duration(milliseconds: 140),
+        curve: Curves.easeOutCubic,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+/// 21st.dev Inspired Glowing Card:
+/// A sleek, glassmorphic card with rounded corners, frosted translucent surface,
+/// subtle hairline gradient border, and optional soft ambient accent glow.
+class GlowCard extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final VoidCallback? onTap;
+  final Color? glowColor;
+  final bool isGlowActive;
+  final double borderRadius;
+
+  const GlowCard({
+    super.key,
+    required this.child,
+    this.padding = const EdgeInsets.all(16),
+    this.onTap,
+    this.glowColor,
+    this.isGlowActive = false,
+    this.borderRadius = 16,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = AppTokens.of(context);
+    final glow = glowColor ?? t.accent;
+    final r = BorderRadius.circular(borderRadius);
+
+    Widget cardBody = Container(
+      decoration: BoxDecoration(
+        color: t.surface,
+        borderRadius: r,
+        border: Border.all(
+          color: isGlowActive
+              ? glow.withValues(alpha: 0.5)
+              : t.hairline,
+          width: isGlowActive ? 1.2 : 0.6,
+        ),
+        boxShadow: isGlowActive
+            ? [
+                BoxShadow(
+                  color: glow.withValues(alpha: 0.16),
+                  blurRadius: 16,
+                  spreadRadius: 1,
+                  offset: const Offset(0, 2),
+                ),
+              ]
+            : null,
+      ),
+      child: ClipRRect(
+        borderRadius: r,
+        child: Padding(padding: padding, child: child),
+      ),
+    );
+
+    if (onTap != null) {
+      return InteractivePress(
+        onTap: onTap,
+        borderRadius: r,
+        child: cardBody,
+      );
+    }
+    return cardBody;
+  }
+}
+
+/// 21st.dev Animated Pulsing Beacon Dot:
+/// Status dot surrounded by a smooth breathing ripple ring to indicate live activity
+/// (e.g. online nodes, generating tokens, active workers).
+class PulsingStatusDot extends StatefulWidget {
+  final Color color;
+  final double size;
+  final bool animate;
+
+  const PulsingStatusDot({
+    super.key,
+    required this.color,
+    this.size = 7,
+    this.animate = true,
+  });
+
+  @override
+  State<PulsingStatusDot> createState() => _PulsingStatusDotState();
+}
+
+class _PulsingStatusDotState extends State<PulsingStatusDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _scaleAnim;
+  late final Animation<double> _fadeAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    );
+    _scaleAnim = Tween<double>(begin: 1.0, end: 2.2).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeOutQuad),
+    );
+    _fadeAnim = Tween<double>(begin: 0.7, end: 0.0).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeOutQuad),
+    );
+    if (widget.animate) _ctrl.repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant PulsingStatusDot oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.animate && !_ctrl.isAnimating) {
+      _ctrl.repeat();
+    } else if (!widget.animate && _ctrl.isAnimating) {
+      _ctrl.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.size;
+    return SizedBox(
+      width: s * 2.4,
+      height: s * 2.4,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          if (widget.animate)
+            AnimatedBuilder(
+              animation: _ctrl,
+              builder: (context, _) {
+                return Opacity(
+                  opacity: _fadeAnim.value,
+                  child: Transform.scale(
+                    scale: _scaleAnim.value,
+                    child: Container(
+                      width: s,
+                      height: s,
+                      decoration: BoxDecoration(
+                        color: widget.color,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          Container(
+            width: s,
+            height: s,
+            decoration: BoxDecoration(
+              color: widget.color,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: widget.color.withValues(alpha: 0.5),
+                  blurRadius: 4,
+                  spreadRadius: 0.5,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 21st.dev Inspired Bento Metric Card:
+/// Compact dashboard tile with key statistic, ambient icon bloom, trend tag, and tabular figures.
+class BentoMetricCard extends StatelessWidget {
+  final String title;
+  final String value;
+  final IconData icon;
+  final Color? accentColor;
+  final String? subtitle;
+  final String? tag;
+  final Color? tagColor;
+
+  const BentoMetricCard({
+    super.key,
+    required this.title,
+    required this.value,
+    required this.icon,
+    this.accentColor,
+    this.subtitle,
+    this.tag,
+    this.tagColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = AppTokens.of(context);
+    final accent = accentColor ?? t.accent;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: t.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: t.hairline, width: 0.6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Icon(icon, size: 17, color: accent),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: t.caption.copyWith(fontWeight: FontWeight.w600, fontSize: 12),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (tag != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: (tagColor ?? accent).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    tag!,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: tagColor ?? accent,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            value,
+            style: GoogleFonts.inter(
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.5,
+              color: t.text,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+          if (subtitle != null && subtitle!.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(
+              subtitle!,
+              style: t.caption.copyWith(fontSize: 11),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ],
       ),
     );
   }

@@ -158,11 +158,13 @@ class ChatView extends GetView<ChatController> {
                           color: text)),
                   const SizedBox(height: 1),
                   Row(children: [
-                    Container(
-                        width: 6,
-                        height: 6,
-                        decoration: BoxDecoration(
-                            shape: BoxShape.circle, color: info.dot)),
+                    PulsingStatusDot(
+                      color: info.dot,
+                      size: 5,
+                      animate: controller.isStreaming.value ||
+                          info.dot == _appleBlue(context) ||
+                          info.dot == const Color(0xFF30D158),
+                    ),
                     const SizedBox(width: 6),
                     Flexible(
                       child: Text(info.name,

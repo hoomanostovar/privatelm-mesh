@@ -109,7 +109,7 @@ class DesktopInferenceEngine {
 
       if (response.statusCode != 200) {
         final fallbackUrl =
-            'https://github.com/${AppConstants.githubRepo}/releases/download/v1.1.2/$assetName';
+            'https://github.com/${AppConstants.githubRepo}/releases/download/v1.1.3/$assetName';
         request = http.Request('GET', Uri.parse(fallbackUrl));
         response = await client.send(request);
       }
@@ -225,7 +225,7 @@ class DesktopInferenceEngine {
     ];
 
     if (flashAttention && _activeBackend.isGpu) {
-      args.add('--flash-attn');
+      args.addAll(['--flash-attn', 'on']);
     }
 
     if (mmprojPath != null && File(mmprojPath).existsSync()) {
@@ -238,6 +238,8 @@ class DesktopInferenceEngine {
 
     print('[DesktopEngine] Launching ($activeBackend): $binary ${args.join(' ')}');
     onProgress?.call(0.1);
+
+    final stderrLines = <String>[];
 
     try {
       _serverProcess = await Process.start(
@@ -258,6 +260,8 @@ class DesktopInferenceEngine {
           .transform(utf8.decoder)
           .transform(const LineSplitter())
           .listen((line) {
+        stderrLines.add(line);
+        if (stderrLines.length > 30) stderrLines.removeAt(0);
         print('[llama-server:err] $line');
       });
 
@@ -274,9 +278,38 @@ class DesktopInferenceEngine {
           onTimeout: () => -999,
         );
         if (exitCode != -999) {
+          final errDetail = stderrLines.isNotEmpty ? ': ${stderrLines.last}' : '.';
+          // If error was related to --flash-attn or arguments, retry cleanly without --flash-attn
+          final fullErr = stderrLines.join(' ');
+          if (fullErr.contains('flash-attn') && args.contains('--flash-attn')) {
+            print('[DesktopEngine] Retrying startup without --flash-attn...');
+            final safeArgs = List<String>.from(args);
+            final faIdx = safeArgs.indexOf('--flash-attn');
+            if (faIdx != -1) {
+              safeArgs.removeAt(faIdx);
+              if (faIdx < safeArgs.length && (safeArgs[faIdx] == 'on' || safeArgs[faIdx] == 'off' || safeArgs[faIdx] == 'auto')) {
+                safeArgs.removeAt(faIdx);
+              }
+            }
+            _serverProcess = await Process.start(
+              binary,
+              safeArgs,
+              workingDirectory: File(binary).parent.path,
+              mode: ProcessStartMode.normal,
+            );
+            _serverProcess!.stdout
+                .transform(utf8.decoder)
+                .transform(const LineSplitter())
+                .listen((l) => print('[llama-server] $l'));
+            _serverProcess!.stderr
+                .transform(utf8.decoder)
+                .transform(const LineSplitter())
+                .listen((l) => print('[llama-server:err] $l'));
+            continue;
+          }
           return LoadResult(
             success: false,
-            message: 'llama-server exited prematurely with code $exitCode.',
+            message: 'llama-server exited with code $exitCode$errDetail',
           );
         }
 

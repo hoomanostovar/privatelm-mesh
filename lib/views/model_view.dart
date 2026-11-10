@@ -2275,21 +2275,27 @@ class _SoftButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = AppTokens.of(context);
-    return Opacity(
-      opacity: onPressed == null ? 0.45 : 1,
-      child: Material(
-        color: t.accent.withValues(alpha: t.isDark ? 0.18 : 0.10),
-        borderRadius: BorderRadius.circular(999),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(999),
-          onTap: onPressed,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-            child: Text(label,
-                style: t.small.copyWith(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: t.accent)),
+    return InteractivePress(
+      onTap: onPressed,
+      child: Opacity(
+        opacity: onPressed == null ? 0.45 : 1,
+        child: Container(
+          decoration: BoxDecoration(
+            color: t.accent.withValues(alpha: t.isDark ? 0.18 : 0.10),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: t.accent.withValues(alpha: t.isDark ? 0.35 : 0.20),
+              width: 0.8,
+            ),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+          child: Text(
+            label,
+            style: t.small.copyWith(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: t.accent,
+            ),
           ),
         ),
       ),
@@ -2310,19 +2316,19 @@ class _RoundIconButton extends StatelessWidget {
     final t = AppTokens.of(context);
     return Tooltip(
       message: tooltip,
-      child: Opacity(
-        opacity: onPressed == null ? 0.45 : 1,
-        child: Material(
-          color: t.fill,
-          shape: const CircleBorder(),
-          child: InkWell(
-            customBorder: const CircleBorder(),
-            onTap: onPressed,
-            child: SizedBox(
-              width: 34,
-              height: 34,
-              child: Icon(icon, size: 18, color: t.text.withValues(alpha: 0.8)),
+      child: InteractivePress(
+        onTap: onPressed,
+        child: Opacity(
+          opacity: onPressed == null ? 0.45 : 1,
+          child: Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: t.fill,
+              shape: BoxShape.circle,
+              border: Border.all(color: t.hairline),
             ),
+            child: Icon(icon, size: 18, color: t.text.withValues(alpha: 0.8)),
           ),
         ),
       ),
@@ -2603,6 +2609,15 @@ class _ModelAvatar extends StatelessWidget {
           decoration: BoxDecoration(
             color: color.withValues(alpha: t.isDark ? 0.22 : 0.14),
             borderRadius: BorderRadius.circular(size * 0.3),
+            boxShadow: loaded
+                ? [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.35),
+                      blurRadius: 10,
+                      spreadRadius: 1,
+                    ),
+                  ]
+                : null,
           ),
           child: Text(
             mono[0].toUpperCase() + mono.substring(1),
@@ -2616,17 +2631,9 @@ class _ModelAvatar extends StatelessWidget {
         ),
         if (loaded)
           Positioned(
-            right: -2,
-            bottom: -2,
-            child: Container(
-              width: 12,
-              height: 12,
-              decoration: BoxDecoration(
-                color: t.green,
-                shape: BoxShape.circle,
-                border: Border.all(color: t.surface, width: 2),
-              ),
-            ),
+            right: -3,
+            bottom: -3,
+            child: PulsingStatusDot(color: t.green, size: 6),
           ),
       ]),
     );

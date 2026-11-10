@@ -22,7 +22,7 @@ class _MeshRadarScannerState extends State<MeshRadarScanner>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 2400),
+    duration: const Duration(milliseconds: 2800),
   )..repeat();
 
   @override
@@ -35,72 +35,118 @@ class _MeshRadarScannerState extends State<MeshRadarScanner>
   Widget build(BuildContext context) {
     final t = AppTokens.of(context);
 
-    return InkWell(
+    return InteractivePress(
       onTap: widget.onScanTap,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(18),
       child: Container(
-        height: 110,
+        height: 120,
         width: double.infinity,
         decoration: BoxDecoration(
           color: t.surface,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: t.hairline),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: t.hairline, width: 0.8),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: t.isDark ? 0.30 : 0.05),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         clipBehavior: Clip.antiAlias,
         child: AnimatedBuilder(
           animation: _controller,
           builder: (context, _) {
             final progress = _controller.value;
+            final sweepAngle = progress * 6.28318530718; // 2 * pi
+
             return Stack(
               alignment: Alignment.center,
               children: [
-                // Expanding ripple 1
-                _rippleCircle(t.accent, (progress * 130).clamp(0, 130), 1.0 - progress),
-                // Expanding ripple 2
+                // Background subtle grid lines
+                CustomPaint(
+                  size: const Size(double.infinity, 120),
+                  painter: _RadarGridPainter(color: t.hairline),
+                ),
+                // Rotating radar beam
+                Transform.rotate(
+                  angle: sweepAngle,
+                  child: Container(
+                    width: 140,
+                    height: 140,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: SweepGradient(
+                        colors: [
+                          t.accent.withValues(alpha: 0.0),
+                          t.accent.withValues(alpha: 0.18),
+                          t.accent.withValues(alpha: 0.0),
+                        ],
+                        stops: const [0.0, 0.25, 0.26],
+                      ),
+                    ),
+                  ),
+                ),
+                // Concentric expanding pulse ripple 1
+                _rippleCircle(t.accent, (progress * 150).clamp(0, 150), 1.0 - progress),
+                // Concentric expanding pulse ripple 2
                 _rippleCircle(
                   t.accent,
-                  (((progress + 0.5) % 1.0) * 130).clamp(0, 130),
+                  (((progress + 0.5) % 1.0) * 150).clamp(0, 150),
                   1.0 - ((progress + 0.5) % 1.0),
                 ),
-                // Center Coordinator Orb
+                // Central Coordinator Orb
                 Container(
-                  width: 44,
-                  height: 44,
+                  width: 46,
+                  height: 46,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     gradient: LinearGradient(
-                      colors: [t.accent, t.accent.withValues(alpha: 0.7)],
+                      colors: [t.accent, t.accent.withValues(alpha: 0.8)],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: t.accent.withValues(alpha: 0.35),
-                        blurRadius: 16,
+                        color: t.accent.withValues(alpha: 0.45),
+                        blurRadius: 20,
                         spreadRadius: 2,
                       ),
                     ],
                   ),
-                  child: const Icon(Icons.hub_rounded, color: Colors.white, size: 22),
+                  child: const Icon(Icons.hub_rounded, color: Colors.white, size: 23),
                 ),
-                // Overlay text
+                // Overlay Pill Badge
                 Positioned(
                   bottom: 10,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                     decoration: BoxDecoration(
-                      color: t.bg.withValues(alpha: 0.85),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: t.hairline),
+                      color: t.bg.withValues(alpha: 0.90),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: t.accent.withValues(alpha: 0.25),
+                        width: 0.8,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.2),
+                          blurRadius: 8,
+                        ),
+                      ],
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        StatusDot(t.green, size: 6),
-                        const SizedBox(width: 6),
+                        PulsingStatusDot(color: t.green, size: 6),
+                        const SizedBox(width: 8),
                         Text(
-                          '${widget.onlineCount} Mesh Node${widget.onlineCount == 1 ? '' : 's'} Active · Scanning',
-                          style: t.caption.copyWith(fontSize: 11, fontWeight: FontWeight.w600),
+                          '${widget.onlineCount} Mesh Node${widget.onlineCount == 1 ? '' : 's'} Active · Tap to Scan',
+                          style: t.caption.copyWith(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: -0.1,
+                          ),
                         ),
                       ],
                     ),
@@ -121,12 +167,33 @@ class _MeshRadarScannerState extends State<MeshRadarScanner>
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         border: Border.all(
-          color: color.withValues(alpha: (opacity * 0.45).clamp(0.0, 1.0)),
+          color: color.withValues(alpha: (opacity * 0.50).clamp(0.0, 1.0)),
           width: 1.5,
         ),
       ),
     );
   }
+}
+
+class _RadarGridPainter extends CustomPainter {
+  final Color color;
+  const _RadarGridPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 0.5
+      ..style = PaintingStyle.stroke;
+
+    final center = Offset(size.width / 2, size.height / 2);
+    canvas.drawCircle(center, 30, paint);
+    canvas.drawCircle(center, 55, paint);
+    canvas.drawLine(Offset(center.dx - 70, center.dy), Offset(center.dx + 70, center.dy), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 /// Dynamic Animated Node Card with Telemetry Badges.
@@ -164,131 +231,123 @@ class MeshNodeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = AppTokens.of(context);
     final statusColor = _statusColor(t);
+    final isSpecialStatus = status == 'communicating' || status == 'benchmarking';
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: t.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: status == 'communicating'
-              ? t.accent.withValues(alpha: 0.6)
-              : status == 'benchmarking'
-                  ? Colors.purple.withValues(alpha: 0.6)
-                  : t.hairline,
-          width: status == 'communicating' || status == 'benchmarking' ? 1.5 : 1.0,
-        ),
-        boxShadow: status == 'communicating'
-            ? [
-                BoxShadow(
-                  color: t.accent.withValues(alpha: 0.12),
-                  blurRadius: 10,
-                  spreadRadius: 1,
-                )
-              ]
-            : null,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  color: t.fill,
-                  borderRadius: BorderRadius.circular(10),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: GlowCard(
+        borderRadius: 16,
+        isGlowActive: isSpecialStatus,
+        glowColor: status == 'communicating' ? t.accent : Colors.purple,
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: t.fill,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: t.hairline),
+                  ),
+                  child: Icon(icon, size: 20, color: t.text),
                 ),
-                child: Icon(icon, size: 20, color: t.text),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            title,
-                            style: t.bodyStrong.copyWith(fontSize: 13.5),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        if (isLocal) ...[
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: t.accent.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
                             child: Text(
-                              'Coordinator',
-                              style: TextStyle(
-                                fontSize: 9.5,
-                                fontWeight: FontWeight.bold,
-                                color: t.accent,
+                              title,
+                              style: t.bodyStrong.copyWith(fontSize: 14),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (isLocal) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: t.accent.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: t.accent.withValues(alpha: 0.3)),
+                              ),
+                              child: Text(
+                                'Coordinator',
+                                style: TextStyle(
+                                  fontSize: 9.5,
+                                  fontWeight: FontWeight.bold,
+                                  color: t.accent,
+                                ),
                               ),
                             ),
-                          ),
+                          ],
                         ],
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(subtitle, style: t.caption.copyWith(fontSize: 11)),
-                  ],
-                ),
-              ),
-              if (trailing != null) trailing!,
-            ],
-          ),
-          const SizedBox(height: 12),
-          // Telemetry Row
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            children: [
-              // Transport Badge
-              if (transportType != null) _transportPill(context),
-              // Status Pill
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: statusColor.withValues(alpha: 0.3)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    StatusDot(statusColor, size: 6),
-                    const SizedBox(width: 4),
-                    Text(
-                      status.toUpperCase(),
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: statusColor,
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 3),
+                      Text(subtitle, style: t.caption.copyWith(fontSize: 11.5)),
+                    ],
+                  ),
                 ),
-              ),
-              // Uptime
-              _telemetryPill(t, Icons.timer_outlined, uptime),
-              // Tokens Generated
-              _telemetryPill(t, Icons.bolt_rounded, '$tokensGenerated tok'),
-              // Tokens per Sec
-              if (tokensPerSec > 0.1)
-                _telemetryPill(t, Icons.speed_rounded, '${tokensPerSec.toStringAsFixed(1)} t/s', highlight: true),
-              // Wattage
-              _telemetryPill(t, Icons.power_outlined, '${wattage.toStringAsFixed(0)} W'),
-            ],
-          ),
-        ],
+                if (trailing != null) trailing!,
+              ],
+            ),
+            const SizedBox(height: 12),
+            // Telemetry Row
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                // Transport Badge
+                if (transportType != null) _transportPill(context),
+                // Status Pill
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: statusColor.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      PulsingStatusDot(
+                        color: statusColor,
+                        size: 5.5,
+                        animate: isSpecialStatus || status == 'ready',
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        status.toUpperCase(),
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.3,
+                          color: statusColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Uptime
+                _telemetryPill(t, Icons.timer_outlined, uptime),
+                // Tokens Generated
+                _telemetryPill(t, Icons.bolt_rounded, '$tokensGenerated tok'),
+                // Tokens per Sec
+                if (tokensPerSec > 0.1)
+                  _telemetryPill(t, Icons.speed_rounded, '${tokensPerSec.toStringAsFixed(1)} t/s', highlight: true),
+                // Wattage
+                _telemetryPill(t, Icons.power_outlined, '${wattage.toStringAsFixed(0)} W'),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -373,7 +432,7 @@ class MeshNodeCard extends StatelessWidget {
   }
 }
 
-/// Mesh Aggregate Telemetry HUD Card.
+/// Mesh Aggregate Telemetry HUD Card with 21st.dev Bento Grid Layout.
 class MeshAggregateTelemetryCard extends StatelessWidget {
   final int totalTokens;
   final double tokensPerSec;
@@ -394,24 +453,50 @@ class MeshAggregateTelemetryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = AppTokens.of(context);
 
-    return AppCard(
+    return GlowCard(
+      borderRadius: 18,
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.insights_rounded, size: 18, color: t.accent),
-              const SizedBox(width: 8),
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: t.accent.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(Icons.insights_rounded, size: 16, color: t.accent),
+              ),
+              const SizedBox(width: 10),
               Expanded(
-                child: Text('Cluster Telemetry & Power HUD', style: t.bodyStrong),
+                child: Text('Cluster Telemetry & Power HUD', style: t.bodyStrong.copyWith(fontSize: 14)),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: t.fill,
-                  borderRadius: BorderRadius.circular(6),
+                  color: t.green.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: t.green.withValues(alpha: 0.25)),
                 ),
-                child: Text('Live', style: t.small.copyWith(fontSize: 10, fontWeight: FontWeight.bold)),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    PulsingStatusDot(color: t.green, size: 5),
+                    const SizedBox(width: 5),
+                    Text(
+                      'LIVE',
+                      style: TextStyle(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.5,
+                        color: t.green,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -419,84 +504,50 @@ class MeshAggregateTelemetryCard extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: _statBox(
-                  context,
-                  label: 'Mesh Tokens',
+                child: BentoMetricCard(
+                  title: 'Mesh Tokens',
                   value: '$totalTokens',
                   icon: Icons.bolt_rounded,
-                  color: t.accent,
+                  accentColor: t.accent,
+                  subtitle: 'Pooled count',
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Expanded(
-                child: _statBox(
-                  context,
-                  label: 'Speed',
-                  value: '${tokensPerSec.toStringAsFixed(1)} tok/s',
+                child: BentoMetricCard(
+                  title: 'Throughput',
+                  value: '${tokensPerSec.toStringAsFixed(1)} t/s',
                   icon: Icons.speed_rounded,
-                  color: t.green,
+                  accentColor: t.green,
+                  tag: tokensPerSec > 0 ? 'ACTIVE' : 'IDLE',
+                  tagColor: tokensPerSec > 0 ? t.green : t.muted,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           Row(
             children: [
               Expanded(
-                child: _statBox(
-                  context,
-                  label: 'Total Power',
+                child: BentoMetricCard(
+                  title: 'Total Power',
                   value: '${totalWattage.toStringAsFixed(0)} W',
                   icon: Icons.power_outlined,
-                  color: t.orange,
+                  accentColor: t.orange,
+                  subtitle: 'Pooled draw',
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Expanded(
-                child: _statBox(
-                  context,
-                  label: 'Efficiency',
-                  value: '${tokensPerWatt.toStringAsFixed(3)} t/J',
+                child: BentoMetricCard(
+                  title: 'Efficiency',
+                  value: '${tokensPerWatt.toStringAsFixed(2)} t/J',
                   icon: Icons.eco_rounded,
-                  color: const Color(0xFF34C759),
+                  accentColor: const Color(0xFF34C759),
+                  subtitle: 'Tokens per Joule',
                 ),
               ),
             ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _statBox(
-    BuildContext context, {
-    required String label,
-    required String value,
-    required IconData icon,
-    required Color color,
-  }) {
-    final t = AppTokens.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: t.surface,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: t.hairline),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 14, color: color),
-              const SizedBox(width: 4),
-              Text(label, style: t.caption.copyWith(fontSize: 11)),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            style: t.bodyStrong.copyWith(fontSize: 14, fontFamily: 'monospace'),
           ),
         ],
       ),

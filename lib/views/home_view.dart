@@ -80,63 +80,111 @@ class HomeView extends GetView<HomeController> {
 
   Widget _buildBottomNav(BuildContext context, bool isDark) {
     final accent = isDark ? const Color(0xFF0A84FF) : const Color(0xFF007AFF);
-    final muted = isDark ? const Color(0xFF7C7C80) : const Color(0xFF8E8E93);
+    final muted = isDark ? const Color(0xFF8E8E93) : const Color(0xFF6E6E73);
     final current = controller.currentTab.value;
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? Colors.black : Colors.white,
-        border: Border(
-            top: BorderSide(
-          color: isDark
-              ? Colors.white.withValues(alpha: 0.08)
-              : Colors.black.withValues(alpha: 0.08),
-          width: 0.5,
-        )),
-      ),
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: 54,
-          child: Row(children: [
-            for (var i = 0; i < _tabs.length; i++)
-              Expanded(
-                child: Semantics(
-                  selected: current == i,
-                  button: true,
-                  label: _tabs[i].label,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () {
-                      if (current != i) Haptics.selectionClick();
-                      controller.changeTab(i);
-                    },
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 160),
-                          child: Icon(
-                            current == i ? _tabs[i].activeIcon : _tabs[i].icon,
-                            key: ValueKey(current == i),
-                            size: 23,
-                            color: current == i ? accent : muted,
-                          ),
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+        child: Container(
+          height: 60,
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xEB111216) : const Color(0xF5FFFFFF),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.10)
+                  : Colors.black.withValues(alpha: 0.08),
+              width: 0.8,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.08),
+                blurRadius: 18,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: LayoutBuilder(builder: (context, box) {
+            final tabWidth = box.maxWidth / _tabs.length;
+            return Stack(
+              children: [
+                // 21st.dev sliding pill indicator with ambient glow
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 260),
+                  curve: Curves.easeOutCubic,
+                  left: tabWidth * current + 4,
+                  top: 5,
+                  bottom: 5,
+                  width: tabWidth - 8,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: accent.withValues(alpha: isDark ? 0.16 : 0.10),
+                      borderRadius: BorderRadius.circular(15),
+                      border: Border.all(
+                        color: accent.withValues(alpha: isDark ? 0.35 : 0.25),
+                        width: 1.0,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: accent.withValues(alpha: isDark ? 0.20 : 0.10),
+                          blurRadius: 10,
+                          spreadRadius: 0.5,
                         ),
-                        const SizedBox(height: 3),
-                        Text(_tabs[i].label,
-                            style: GoogleFonts.inter(
-                                fontSize: 10.5,
-                                letterSpacing: 0.1,
-                                fontWeight: current == i
-                                    ? FontWeight.w600
-                                    : FontWeight.w500,
-                                color: current == i ? accent : muted)),
                       ],
                     ),
                   ),
                 ),
-              ),
-          ]),
+                // Tab Buttons
+                Row(
+                  children: [
+                    for (var i = 0; i < _tabs.length; i++)
+                      Expanded(
+                        child: Semantics(
+                          selected: current == i,
+                          button: true,
+                          label: _tabs[i].label,
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () {
+                              if (current != i) Haptics.selectionClick();
+                              controller.changeTab(i);
+                            },
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                AnimatedScale(
+                                  scale: current == i ? 1.08 : 0.96,
+                                  duration: const Duration(milliseconds: 200),
+                                  curve: Curves.easeOutCubic,
+                                  child: Icon(
+                                    current == i ? _tabs[i].activeIcon : _tabs[i].icon,
+                                    size: 22,
+                                    color: current == i ? accent : muted,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  _tabs[i].label,
+                                  style: GoogleFonts.inter(
+                                    fontSize: 10.5,
+                                    letterSpacing: 0.1,
+                                    fontWeight: current == i ? FontWeight.w700 : FontWeight.w500,
+                                    color: current == i ? (isDark ? Colors.white : accent) : muted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            );
+          }),
         ),
       ),
     );

@@ -68,7 +68,7 @@ class SettingsController extends GetxController {
   final imageGenSize = AppConstants.defaultImageGenSize.obs;
   final fontScale = AppConstants.defaultFontScale.obs;
   final hapticsEnabled = true.obs;
-  final appVersion = '1.1.2'.obs;
+  final appVersion = '1.1.3'.obs;
 
   // Persistent text controllers for settings fields
   final openaiKeyController = TextEditingController();
