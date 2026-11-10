@@ -209,7 +209,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y glslc
           if [ ! -f "local_plugins/sd_flutter_android/android/src/main/cpp/stable-diffusion.cpp/CMakeLists.txt" ]; then
-            git clone --depth 1 --recursive https://github.com/leejet/stable-diffusion.cpp.git local_plugins/sd_flutter_android/android/src/main/cpp/stable-diffusion.cpp
+            git clone https://github.com/leejet/stable-diffusion.cpp.git local_plugins/sd_flutter_android/android/src/main/cpp/stable-diffusion.cpp
+            (cd local_plugins/sd_flutter_android/android/src/main/cpp/stable-diffusion.cpp && git checkout 90e87bc846f17059771efb8aaa31e9ef0cab6f78 && git submodule update --init --recursive)
           fi
           flutter pub get
 
