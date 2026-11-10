@@ -40,6 +40,12 @@ PrivateLM-Mesh is **completely self-contained and zero-setup**: all native infer
 - **Bento Telemetry Cards**: Live tracking of mesh tokens generated, aggregate throughput (tokens/second), individual device uptime, real-time power draw (watts), and compute efficiency (tokens/watt).
 - **Multi-Power-Tier Mesh Benchmark**: Built-in benchmark suite to stress-test your mesh cluster across 4 power profiles (**Eco, Balanced, Performance, Extreme**) to calculate maximum tokens/sec, KV cache throughput, and thermal headroom.
 
+### 🧠 Intelligent Context Compaction (`/compact`) & Chat Workflow
+- **DeepSeek & Claude-Inspired Compaction**: Condenses lengthy conversations into a structured `<CONTEXT_SUMMARY>` covering *Primary Objectives*, *Key Constraints & User Decisions*, *Technical Context & Files*, and *Current State & Tasks*. Preserves recent active turns verbatim while purging native KV cache on the inference engine to restore speed.
+- **Dual-Engine Execution**: High-intelligence semantic summarization when models are loaded, backed by a deterministic, zero-failure pure-Dart heuristic compactor when offline.
+- **Seamless Text Selection & Block Copying**: Unified continuous text selection across paragraphs and bubbles via Flutter `SelectionArea`, single-click copy buttons for prompt/replies, and syntax-styled code cards with language tags and copy actions.
+- **Fail-Safe Offline RPC Protection**: Pre-flight socket health probing automatically detects offline cluster nodes, falling back gracefully to local compute without `0xC0000409` crash exits.
+
 ### 🎨 21st.dev Obsidian Glass UI
 - **Crafted Aesthetic**: Deep obsidian canvas (`0xFF090A0D`), frosted glass cards (`GlowCard`) with ambient accent illumination, tactile spring-scaling haptic interactions (`InteractivePress`), and animated breathing status rings (`PulsingStatusDot`).
 - **Floating Glass Dock**: Translucent, bottom-anchored floating dock with sliding illuminated pills for instant, fluid navigation between Chat, Models, Network Mesh, Tasks, and Settings.

@@ -5,6 +5,8 @@ import 'package:google_fonts/google_fonts.dart';
 import '../models/chat_message.dart';
 import '../utils/thought_parser.dart';
 import 'attachment_preview.dart';
+import 'code_block_builder.dart';
+import 'compacted_context_bubble.dart';
 import 'image_viewer.dart';
 import 'thought_disclosure.dart';
 import '../core/haptics.dart';
@@ -16,6 +18,12 @@ class ChatBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Compacted Context Summary milestone card
+    if (message.role == 'system' ||
+        message.content.contains('<CONTEXT_SUMMARY>')) {
+      return CompactedContextBubble(message: message);
+    }
+
     final isUser = message.role == 'user';
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -82,7 +90,7 @@ class ChatBubble extends StatelessWidget {
               ),
             ),
           ),
-        if (text.trim().isNotEmpty)
+        if (text.trim().isNotEmpty) ...[
           Container(
             constraints: BoxConstraints(maxWidth: maxW),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -90,7 +98,7 @@ class ChatBubble extends StatelessWidget {
               color: _userFill(isDark),
               borderRadius: BorderRadius.circular(20),
             ),
-            child: SelectableText(
+            child: Text(
               text,
               style: GoogleFonts.inter(
                 fontSize: 15.5,
@@ -100,6 +108,13 @@ class ChatBubble extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(height: 2),
+          _CopyButton(
+            text: text,
+            color: Theme.of(context).hintColor.withValues(alpha: 0.6),
+            tooltip: 'Copy prompt',
+          ),
+        ],
       ]),
     );
   }
@@ -126,7 +141,10 @@ class ChatBubble extends StatelessWidget {
         if (answerContent.isNotEmpty)
           MarkdownBody(
             data: answerContent,
-            selectable: true,
+            selectable: false,
+            builders: {
+              'pre': CodeBlockBuilder(context),
+            },
             styleSheet: answerStyle(context),
           ),
         if (message.fileName != null) ...[
@@ -146,7 +164,11 @@ class ChatBubble extends StatelessWidget {
             offset: const Offset(-6, 0),
             child: Row(children: [
               if (answerContent.isNotEmpty)
-                _CopyButton(text: answerContent, color: muted),
+                _CopyButton(
+                  text: answerContent,
+                  color: muted,
+                  tooltip: 'Copy reply',
+                ),
               if (meta.isNotEmpty) ...[
                 const SizedBox(width: 6),
                 Text(meta.join(' · '),
@@ -343,7 +365,12 @@ class ChatBubble extends StatelessWidget {
 class _CopyButton extends StatefulWidget {
   final String text;
   final Color color;
-  const _CopyButton({required this.text, required this.color});
+  final String? tooltip;
+  const _CopyButton({
+    required this.text,
+    required this.color,
+    this.tooltip,
+  });
 
   @override
   State<_CopyButton> createState() => _CopyButtonState();
@@ -364,7 +391,7 @@ class _CopyButtonState extends State<_CopyButton> {
   @override
   Widget build(BuildContext context) {
     return Tooltip(
-      message: 'Copy',
+      message: widget.tooltip ?? 'Copy',
       child: InkResponse(
         onTap: _copy,
         radius: 18,

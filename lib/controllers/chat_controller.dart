@@ -14,6 +14,7 @@ import 'package:uuid/uuid.dart';
 import 'package:gal/gal.dart';
 import '../controllers/settings_controller.dart';
 import '../core/constants.dart';
+import '../core/haptics.dart';
 import '../core/ui.dart';
 import '../models/chat_message.dart';
 import '../models/chat_session.dart';
@@ -25,6 +26,7 @@ import '../services/local_image_service.dart';
 import '../services/app_log_service.dart';
 import '../services/image_generation_notification_service.dart';
 import '../services/document_extractor_service.dart';
+import '../services/context_compactor_service.dart';
 import '../utils/thought_parser.dart';
 
 const int _visionImageMaxSide = 768;
@@ -78,6 +80,7 @@ class ChatController extends GetxController {
   // Real-time streaming state — the AI response as it's being generated
   final streamingResponse = ''.obs;
   final isStreaming = false.obs;
+  final isCompacting = false.obs;
   final streamingAttachmentType = Rxn<String>();
 
   // Image generation progress (lightweight, replaces text-heavy updates)
@@ -223,6 +226,87 @@ class ChatController extends GetxController {
     if (currentSessionId.value == sessionId) {
       currentSessionId.value = '';
       messages.clear();
+    }
+  }
+
+  /// Compacts older conversation messages into a structured <CONTEXT_SUMMARY>,
+  /// preserving primary objectives, constraints, and state, while keeping the
+  /// most recent turns intact and purging native KV cache.
+  Future<void> compactConversation({bool forced = false}) async {
+    if (isCompacting.value || isLoading.value || isStreaming.value) return;
+
+    if (messages.length <= 2 && !forced) {
+      showToast(
+        'Already Compact',
+        'Conversation is too short to compact (fewer than 3 messages).',
+        tone: ToastTone.info,
+      );
+      return;
+    }
+
+    isCompacting.value = true;
+    try {
+      final inf = Get.find<InferenceService>();
+      Future<String?> Function(String)? summarizer;
+      if (inf.isModelLoaded.value) {
+        summarizer = (prompt) => inf.generate(
+              prompt: prompt,
+              maxTokens: 512,
+              systemPrompt:
+                  'You are an expert technical conversation summarizer.',
+            );
+      }
+
+      final result = await ContextCompactorService.compact(
+        messages: messages.toList(),
+        retainRecent: 2,
+        modelSummarizer: summarizer,
+      );
+
+      if (result == null) {
+        showToast('Already Compact', 'No earlier turns to compact.',
+            tone: ToastTone.info);
+        return;
+      }
+
+      // Split messages into pruned and retained
+      final splitIndex = messages.length - 2;
+      final toPrune = messages.sublist(0, splitIndex);
+      final toRetain = messages.sublist(splitIndex);
+
+      // Delete pruned messages from database
+      final prunedIds = toPrune.map((m) => m.id).toList();
+      await _hive.deleteMessages(prunedIds);
+
+      // Create new system snapshot message
+      final summaryMsg = ChatMessage(
+        id: _uuid.v4(),
+        chatId: currentSessionId.value,
+        role: 'system',
+        content: result.summary,
+        timestamp: toRetain.first.timestamp
+            .subtract(const Duration(milliseconds: 1)),
+      );
+      await _hive.saveMessage(summaryMsg.id, summaryMsg.toMap());
+
+      // Update in-memory message list
+      messages.value = [summaryMsg, ...toRetain];
+
+      // Reset native inference engine KV cache
+      await inf.resetConversation();
+      await inf.refreshContextInfo();
+
+      Haptics.heavyImpact();
+      showToast(
+        'Context Compacted',
+        'Condensed ${result.prunedCount} messages · Saved ~${result.estimatedTokensSaved} tokens',
+        tone: ToastTone.success,
+      );
+    } catch (e) {
+      showToast('Compaction Failed', 'Error compacting context: $e',
+          tone: ToastTone.error);
+    } finally {
+      isCompacting.value = false;
     }
   }
 
@@ -570,6 +654,15 @@ class ChatController extends GetxController {
     if (isLoading.value || isStreaming.value) return;
 
     final text = textController.text.trim();
+
+    // Handle slash commands
+    if (text == '/compact' || text.startsWith('/compact ')) {
+      textController.clear();
+      inputText.value = '';
+      await compactConversation();
+      return;
+    }
+
     final hasAttachment =
         selectedImagePath.value != null || selectedFileName.value != null;
     if (text.isEmpty && !hasAttachment) return;
@@ -681,7 +774,8 @@ class ChatController extends GetxController {
 
       // Build conversation history
       final history = messages
-          .where((m) => m.role == 'user' || m.role == 'assistant')
+          .where((m) =>
+              m.role == 'user' || m.role == 'assistant' || m.role == 'system')
           .map((m) => {
                 'role': m.role,
                 'content': m.role == 'assistant'

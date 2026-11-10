@@ -81,6 +81,14 @@ class HiveService extends GetxService {
     await _messagesBox.put(id, data);
   }
 
+  Future<void> deleteMessage(String id) async {
+    await _messagesBox.delete(id);
+  }
+
+  Future<void> deleteMessages(Iterable<String> ids) async {
+    await _messagesBox.deleteAll(ids);
+  }
+
   // ─── Tasks ─────────────────────────────────────
 
   List<Map<dynamic, dynamic>> getAllTasks() {

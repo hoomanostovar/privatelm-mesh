@@ -18,6 +18,7 @@ import '../utils/thought_parser.dart';
 import '../widgets/attachment_preview.dart';
 import '../widgets/chat_bubble.dart';
 import '../widgets/chat_drawer.dart';
+import '../widgets/code_block_builder.dart';
 import '../widgets/home_empty_state.dart';
 import '../core/ui.dart';
 import '../widgets/thought_disclosure.dart';
@@ -48,38 +49,101 @@ class ChatView extends GetView<ChatController> {
       body: Column(
         children: [
           _modelLoadingBar(context, isDark),
-          Expanded(child: Obx(() {
-            if (controller.currentSessionId.value.isEmpty ||
-                controller.messages.isEmpty) {
-              return _emptyState(context, isDark);
-            }
-            final streaming = controller.isStreaming.value;
-            final text = controller.streamingResponse.value;
-            final n = controller.messages.length;
-            return NotificationListener<ScrollUpdateNotification>(
-              onNotification: (note) {
-                if (note.dragDetails != null && streaming) {
-                  if ((note.scrollDelta ?? 0) < 0) {
-                    controller.pauseStreamingFollow();
-                  } else {
-                    controller.resumeStreamingFollowIfNearBottom();
-                  }
+          Expanded(
+            child: SelectionArea(
+              child: Obx(() {
+                if (controller.currentSessionId.value.isEmpty ||
+                    controller.messages.isEmpty) {
+                  return _emptyState(context, isDark);
                 }
-                return false;
-              },
-              child: ListView.builder(
-                controller: controller.scrollController,
-                padding: const EdgeInsets.only(top: 8, bottom: 8),
-                itemCount: n + (streaming ? 1 : 0),
-                itemBuilder: (_, i) {
-                  if (i == n && streaming) {
-                    return _streamBubble(context, text, isDark);
-                  }
-                  return ChatBubble(message: controller.messages[i]);
-                },
+                final streaming = controller.isStreaming.value;
+                final text = controller.streamingResponse.value;
+                final n = controller.messages.length;
+                return NotificationListener<ScrollUpdateNotification>(
+                  onNotification: (note) {
+                    if (note.dragDetails != null && streaming) {
+                      if ((note.scrollDelta ?? 0) < 0) {
+                        controller.pauseStreamingFollow();
+                      } else {
+                        controller.resumeStreamingFollowIfNearBottom();
+                      }
+                    }
+                    return false;
+                  },
+                  child: ListView.builder(
+                    controller: controller.scrollController,
+                    padding: const EdgeInsets.only(top: 8, bottom: 8),
+                    itemCount: n + (streaming ? 1 : 0),
+                    itemBuilder: (_, i) {
+                      if (i == n && streaming) {
+                        return _streamBubble(context, text, isDark);
+                      }
+                      return ChatBubble(message: controller.messages[i]);
+                    },
+                  ),
+                );
+              }),
+            ),
+          ),
+          Obx(() {
+            final usage = _contextUsage();
+            if (usage == null ||
+                usage.pct < 0.75 ||
+                controller.messages.length <= 2) {
+              return const SizedBox.shrink();
+            }
+            final pct = (usage.pct * 100).round();
+            return Container(
+              margin: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF9500).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: const Color(0xFFFF9500).withValues(alpha: 0.35),
+                  width: 0.8,
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.bolt_rounded,
+                      size: 16, color: Color(0xFFFF9500)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Context $pct% full · Compact context to retain speed',
+                      style: GoogleFonts.inter(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w500,
+                        color: isDark
+                            ? const Color(0xFFFFB340)
+                            : const Color(0xFFCC7700),
+                      ),
+                    ),
+                  ),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(6),
+                    onTap: () {
+                      Haptics.selectionClick();
+                      controller.compactConversation();
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      child: Text(
+                        'Compact',
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: const Color(0xFFFF9500),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             );
-          })),
+          }),
           _inputBar(context, isDark),
         ],
       ),
@@ -182,6 +246,18 @@ class ChatView extends GetView<ChatController> {
         );
       }),
       actions: [
+        Obx(() {
+          if (controller.messages.length <= 2) return const SizedBox.shrink();
+          return IconButton(
+            tooltip: 'Compact context (/compact)',
+            icon: Icon(Icons.compress_rounded,
+                size: 20, color: isDark ? Colors.white : Colors.black),
+            onPressed: () {
+              Haptics.selectionClick();
+              controller.compactConversation();
+            },
+          );
+        }),
         Obx(() {
           if (controller.messages.isEmpty) return const SizedBox.shrink();
           final usage = _contextUsage();
@@ -396,8 +472,19 @@ class ChatView extends GetView<ChatController> {
                   ),
                   if (warn) ...[
                     const SizedBox(height: 8),
-                    Text('Almost full. Start a new chat for best results.',
-                        style: GoogleFonts.inter(fontSize: 12.5, color: muted)),
+                    Text('Almost full. Compact context to free up memory.',
+                        style: GoogleFonts.inter(fontSize: 12.5, color: const Color(0xFFFF9500))),
+                  ],
+                  if (controller.messages.length > 2) ...[
+                    const SizedBox(height: 12),
+                    TonalButton.neutral(
+                      ctx,
+                      label: 'Compact conversation context',
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        controller.compactConversation();
+                      },
+                    ),
                   ],
                 ],
                 const SizedBox(height: 24),
@@ -509,7 +596,10 @@ class ChatView extends GetView<ChatController> {
               Expanded(
                   child: MarkdownBody(
                       data: answer,
-                      selectable: true,
+                      selectable: false,
+                      builders: {
+                        'pre': CodeBlockBuilder(context),
+                      },
                       styleSheet: _streamMd(context, isDark))),
               _BlinkingCursor(color: Theme.of(context).hintColor),
             ]),

@@ -183,7 +183,7 @@ class _ThoughtDisclosureState extends State<ThoughtDisclosure>
               ),
               child: MarkdownBody(
                 data: widget.thought.trim(),
-                selectable: true,
+                selectable: false,
                 styleSheet: widget.styleSheet,
               ),
             ),
