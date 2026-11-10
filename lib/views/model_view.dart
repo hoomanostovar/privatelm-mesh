@@ -119,10 +119,13 @@ class ModelView extends GetView<ModelController> {
 
   Widget _buildLocalFilterChips(BuildContext context) {
     final labels = [
+      ('all', 'All'),
+      ('gguf', '🌐 GGUF (Mesh Cluster)'),
+      ('litert', '📱 LiteRT (Mobile)'),
       ('general', 'Chat'),
-      ('image', 'Image'),
-      ('uncensored', 'Uncensored'),
       ('vision', 'Vision'),
+      ('uncensored', 'Uncensored'),
+      ('image', 'Image'),
       if (ModelController.supportsAppleNpu) ('npu', 'Apple NPU'),
     ];
     return Obx(() {
@@ -1397,10 +1400,17 @@ class ModelView extends GetView<ModelController> {
     final filter = controller.localFilter.value.isEmpty
         ? controller.defaultLocalFilter
         : controller.localFilter.value;
+    final t = AppTokens.of(context);
     return [
+      if (controller.isLlamaModel(model))
+        AppTag('GGUF · Mesh Ready',
+            icon: Icons.hub_rounded, color: t.accent),
+      if (controller.isLiteRtModel(model))
+        AppTag('LiteRT · Single Device',
+            icon: Icons.smartphone_rounded, color: t.orange),
       if (model.recommendedFor.contains(filter))
         AppTag('Recommended',
-            icon: Icons.star_rounded, color: AppTokens.of(context).accent),
+            icon: Icons.star_rounded, color: t.accent),
       if (controller.isVisionModel(model))
         const AppTag('Vision', icon: Icons.visibility_outlined),
       if (controller.isImageModel(model))
@@ -1544,11 +1554,19 @@ class ModelView extends GetView<ModelController> {
         } else if (isActive) {
           primaryAction = AppTag('Loaded', color: t.green);
         } else if (library) {
+          final isDesktop = ModelController.isDesktop;
+          final isLiteRtOnDesktop = isDesktop && controller.isLiteRtModel(model);
           primaryAction = _SoftButton(
-            label: 'Load',
+            label: isLiteRtOnDesktop ? 'Android Only' : 'Load',
             onPressed: disableActions
                 ? null
-                : () => controller.loadModel(actualFilename),
+                : isLiteRtOnDesktop
+                    ? () => showToast(
+                          'Incompatible with Desktop',
+                          'LiteRT models run exclusively on Android. For PC and multi-device cluster mesh, please use GGUF models.',
+                          tone: ToastTone.info,
+                        )
+                    : () => controller.loadModel(actualFilename),
           );
         } else {
           primaryAction = Row(mainAxisSize: MainAxisSize.min, children: [
@@ -1714,7 +1732,7 @@ class ModelView extends GetView<ModelController> {
         onTap: controller.toggleSort,
       );
 
-  /// My models: everything on the phone. Tap a row to load it.
+  /// My models: everything on the device. Tap a row to load it.
   List<Widget> _buildLibrary(BuildContext context) {
     final models = controller.displayedModels
         .where((m) => controller.isDownloaded(m.filename))
@@ -1722,16 +1740,24 @@ class ModelView extends GetView<ModelController> {
     if (models.isEmpty) return [_buildEmptyLibrary(context)];
     final t = AppTokens.of(context);
     final image = models.where(controller.isImageModel).toList();
-    final vision = models
-        .where(
-            (m) => !controller.isImageModel(m) && controller.isVisionModel(m))
+    final ggufModels = models
+        .where((m) => !image.contains(m) && controller.isLlamaModel(m))
         .toList();
-    final chat =
-        models.where((m) => !image.contains(m) && !vision.contains(m)).toList();
+    final liteRtModels = models
+        .where((m) => !image.contains(m) && controller.isLiteRtModel(m))
+        .toList();
+    final other = models
+        .where((m) =>
+            !image.contains(m) &&
+            !ggufModels.contains(m) &&
+            !liteRtModels.contains(m))
+        .toList();
+
     var first = true;
-    List<Widget> group(String title, List<AiModel> list) {
+    List<Widget> group(String title, String? subtitle, List<AiModel> list) {
       if (list.isEmpty) return const [];
       final header = SectionHeader(title,
+          subtitle: subtitle,
           padding: EdgeInsets.fromLTRB(4, first ? 14 : 22, 0, 8));
       first = false;
       return [
@@ -1748,13 +1774,27 @@ class ModelView extends GetView<ModelController> {
         child: Row(children: [
           Expanded(
               child:
-                  Text('On this device · ${models.length}', style: t.caption)),
+                  Text('On this device · ${models.length} downloaded', style: t.caption)),
           _sortAction(),
         ]),
       ),
-      ...group('Chat', chat),
-      ...group('Vision', vision),
-      ...group('Image', image),
+      ...group(
+        '🌐 Mesh Cluster Models (GGUF) · ${ggufModels.length}',
+        'Universal format · Multi-device cluster layer offload & mesh distribution ready',
+        ggufModels,
+      ),
+      ...group(
+        '📱 On-Device Mobile Models (LiteRT) · ${liteRtModels.length}',
+        'Google LiteRT-LM · Single-device Android models',
+        liteRtModels,
+      ),
+      ...group(
+        '🎨 Image Generation Models · ${image.length}',
+        'Stable Diffusion text-to-image models',
+        image,
+      ),
+      if (other.isNotEmpty)
+        ...group('Other Models · ${other.length}', null, other),
     ];
   }
 
@@ -1766,13 +1806,101 @@ class ModelView extends GetView<ModelController> {
         const EmptyState(
             icon: Icons.search_off_rounded,
             title: 'No models here yet',
-            message: 'Try another type.'),
+            message: 'Try another category or filter.'),
       ];
     }
+
+    final isAll = controller.localFilter.value == 'all';
+    if (isAll) {
+      final ggufModels = models.where(controller.isLlamaModel).toList();
+      final liteRtModels = models.where(controller.isLiteRtModel).toList();
+      final imageModels = models.where(controller.isImageModel).toList();
+
+      return [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 16, 4, 4),
+          child: Row(children: [
+            Expanded(
+              child: Text('Model Catalog · ${models.length} models',
+                  style: AppTokens.of(context).caption),
+            ),
+            _sortAction(),
+          ]),
+        ),
+        if (ggufModels.isNotEmpty) ...[
+          SectionHeader(
+            '🌐 Mesh Cluster Models (GGUF) · ${ggufModels.length}',
+            subtitle:
+                'Universal format · Cross-platform (PC, Mac, Linux, Android) · Multi-device cluster layer offload & P2P sharing ready',
+            padding: const EdgeInsets.fromLTRB(4, 14, 0, 8),
+          ),
+          AppGroup(children: [
+            for (final m in ggufModels) _buildModelCard(context, m),
+          ]),
+        ],
+        if (liteRtModels.isNotEmpty) ...[
+          SectionHeader(
+            '📱 On-Device Mobile Models (LiteRT) · ${liteRtModels.length}',
+            subtitle:
+                'Google LiteRT-LM · Single-device Android inference only (not cluster-splittable)',
+            padding: const EdgeInsets.fromLTRB(4, 22, 0, 8),
+          ),
+          AppGroup(children: [
+            for (final m in liteRtModels) _buildModelCard(context, m),
+          ]),
+        ],
+        if (imageModels.isNotEmpty) ...[
+          SectionHeader(
+            '🎨 Image Generation Models · ${imageModels.length}',
+            subtitle: 'Stable Diffusion on-device text-to-image',
+            padding: const EdgeInsets.fromLTRB(4, 22, 0, 8),
+          ),
+          AppGroup(children: [
+            for (final m in imageModels) _buildModelCard(context, m),
+          ]),
+        ],
+      ];
+    }
+
+    final filter = controller.localFilter.value;
+    final String title;
+    final String? subtitle;
+    switch (filter) {
+      case 'gguf':
+        title = '🌐 Mesh Cluster Models (GGUF)';
+        subtitle =
+            'Universal cross-platform format · Distribute across mesh & split layers over ggml-rpc';
+        break;
+      case 'litert':
+        title = '📱 On-Device Mobile Models (LiteRT)';
+        subtitle =
+            'Google LiteRT-LM · High-performance single-device mobile models';
+        break;
+      case 'vision':
+        title = '👁️ Vision Models';
+        subtitle = 'Multimodal models capable of image understanding';
+        break;
+      case 'uncensored':
+        title = '🔓 Uncensored Models';
+        subtitle = 'Models without safety alignments or refusals';
+        break;
+      case 'image':
+        title = '🎨 Image Generation Models';
+        subtitle = 'Stable Diffusion on-device text-to-image';
+        break;
+      default:
+        title = 'All Models (${models.length})';
+        subtitle = null;
+        break;
+    }
+
     return [
-      SectionHeader('All ${models.length}',
-          padding: const EdgeInsets.fromLTRB(4, 20, 0, 8),
-          trailing: _sortAction()),
+      SectionHeader(
+        '$title · ${models.length}',
+        subtitle: subtitle,
+        padding: const EdgeInsets.fromLTRB(4, 20, 0, 8),
+        trailing: _sortAction(),
+      ),
       AppGroup(children: [
         for (final m in models) _buildModelCard(context, m),
       ]),

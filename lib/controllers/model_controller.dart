@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -68,7 +69,14 @@ class ModelController extends GetxController {
   /// Apple Neural Engine (Core ML) models are only usable on Apple devices.
   static bool get supportsAppleNpu => Platform.isIOS || Platform.isMacOS;
 
+  /// Whether current platform is desktop (PC, Mac, Linux).
+  static bool get isDesktop =>
+      !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+
   static const localFilters = [
+    'all',
+    'gguf',
+    'litert',
     'general',
     'image',
     'uncensored',
@@ -102,6 +110,10 @@ class ModelController extends GetxController {
         localFilter.value.isEmpty ? defaultLocalFilter : localFilter.value;
     final filtered = displayedModels.where((model) {
       switch (filter) {
+        case 'gguf':
+          return isLlamaModel(model);
+        case 'litert':
+          return isLiteRtModel(model);
         case 'uncensored':
           return isUncensoredModel(model);
         case 'vision':
@@ -111,8 +123,10 @@ class ModelController extends GetxController {
         case 'npu':
           return isNpuModel(model);
         case 'general':
-        default:
           return isGeneralModel(model);
+        case 'all':
+        default:
+          return true;
       }
     }).toList();
     // The filter's recommended pick goes first; the rest keep their order
@@ -123,7 +137,10 @@ class ModelController extends GetxController {
     ];
   }
 
-  String get defaultLocalFilter => 'general';
+  String get defaultLocalFilter {
+    if (isDesktop) return 'gguf';
+    return 'all';
+  }
 
   double get importProgress => importTotalBytes.value <= 0
       ? 0.0

@@ -301,12 +301,12 @@ class DesktopInferenceEngine {
         print('[llama-server:err] $line');
       });
 
-      // Wait for server health endpoint to respond
+      // Wait for server health endpoint to respond with 200 OK
       final healthUri = Uri.parse('http://127.0.0.1:$port/health');
       var ready = false;
-      for (var i = 0; i < 40; i++) {
+      for (var i = 0; i < 120; i++) {
         await Future.delayed(const Duration(milliseconds: 500));
-        onProgress?.call(0.1 + (i / 40.0) * 0.85);
+        onProgress?.call(0.1 + (i / 120.0) * 0.85);
 
         // Check if process crashed early
         final exitCode = await _serverProcess?.exitCode.timeout(
@@ -351,9 +351,14 @@ class DesktopInferenceEngine {
 
         try {
           final res = await http.get(healthUri).timeout(const Duration(seconds: 1));
-          if (res.statusCode == 200 || res.statusCode == 503) {
+          // Note: llama-server returns 503 while loading model weights.
+          // Only 200 OK means the model has finished loading and is ready for inference!
+          if (res.statusCode == 200) {
             ready = true;
             break;
+          }
+          if (res.statusCode == 503) {
+            print('[DesktopEngine] llama-server still loading model weights (HTTP 503)...');
           }
         } catch (_) {}
       }
@@ -409,6 +414,17 @@ class DesktopInferenceEngine {
     _activeClient = client;
 
     final uri = Uri.parse('http://127.0.0.1:$port/v1/chat/completions');
+    final healthUri = Uri.parse('http://127.0.0.1:$port/health');
+
+    // If server is momentarily finishing its load state (503), wait for 200 OK before sending
+    for (var w = 0; w < 30; w++) {
+      try {
+        final hRes = await client.get(healthUri).timeout(const Duration(milliseconds: 500));
+        if (hRes.statusCode == 200) break;
+      } catch (_) {}
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+
     final formattedMessages = messages.map((m) {
       return {'role': m.role, 'content': m.content};
     }).toList();
@@ -428,6 +444,10 @@ class DesktopInferenceEngine {
 
     try {
       final streamedResponse = await client.send(request);
+      if (streamedResponse.statusCode == 503) {
+        yield 'Model is still finishing initialization into memory. Please retry in a few seconds.';
+        return;
+      }
       if (streamedResponse.statusCode != 200) {
         final errBody = await streamedResponse.stream.bytesToString();
         print('[DesktopEngine] Error ${streamedResponse.statusCode}: $errBody');

@@ -155,10 +155,12 @@ const kPagePadding = EdgeInsets.fromLTRB(16, 4, 16, 32);
 /// toggle or a count).
 class SectionHeader extends StatelessWidget {
   final String title;
+  final String? subtitle;
   final Widget? trailing;
   final EdgeInsetsGeometry padding;
   const SectionHeader(this.title,
       {super.key,
+      this.subtitle,
       this.trailing,
       this.padding = const EdgeInsets.fromLTRB(4, 24, 4, 8)});
 
@@ -167,10 +169,25 @@ class SectionHeader extends StatelessWidget {
     final t = AppTokens.of(context);
     return Padding(
       padding: padding,
-      child: Row(children: [
-        Expanded(child: Text(title, style: t.label)),
-        if (trailing != null) trailing!,
-      ]),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(title, style: t.label),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 2),
+                  Text(subtitle!, style: t.caption),
+                ],
+              ],
+            ),
+          ),
+          if (trailing != null) trailing!,
+        ],
+      ),
     );
   }
 }
