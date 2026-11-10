@@ -100,23 +100,102 @@ API keys are stored in Hive and never transmitted anywhere except to the provide
 
 ### Cross-Platform Abstraction
 
-Local inference is conditionally compiled:
+Local inference is dynamically and natively handled across platforms:
 
-- **Android** → `inference_android.dart` (full llama.cpp engine)
-- **Web** → `inference_stub.dart` (cloud-only, local coming soon)
-- **iOS** → `inference_android.dart` (full llama.cpp engine via Metal GPU)
+- **Windows PC** → `desktop_inference_engine.dart` (bundled `llama-server.exe` with NVIDIA CUDA / AVX2 CPU and `--rpc` multi-node pooling)
+- **macOS** → `desktop_inference_engine.dart` (bundled `llama-server` with Apple Silicon Metal acceleration)
+- **Linux** → `desktop_inference_engine.dart` (bundled `llama-server` with Vulkan / CPU AVX-512)
+- **Android** → `inference_android.dart` (embedded `llama_flutter_android` with ARM64 Vulkan/NEON)
+- **iOS** → `inference_android.dart` (Metal GPU acceleration)
+- **Web** → `inference_stub.dart` (Cloud API fallback)
 
-The `InferenceService` exposes `supportsLocalInference` so the UI can hide local-model UI on unsupported platforms.
+The `InferenceService` exposes `supportsLocalInference` and delegates to `DesktopInferenceEngine` on desktop platforms and `llama_flutter_android` on mobile devices.
 
 ---
 
-## Supported Platforms
+## Supported Platforms & Download Links
 
-| Platform | Local Inference | Cloud APIs | Notes                           |
-| -------- | --------------- | ---------- | ------------------------------- |
-| Android  | ✅ Yes          | ✅ Yes     | CPU offload via NEON; minSdk 28 |
-| iOS      | ✅ Yes          | ✅ Yes     | Metal GPU acceleration          |
-| Web      | ❌ No           | ✅ Yes     | Cloud-only (local coming soon)  |
+Latest binaries are available on the [**GitHub Releases Page (v1.1.0-mesh)**](https://github.com/hoomanostovar/privatelm-mesh/releases/tag/v1.1.0-mesh).
+
+| Platform | Local Inference & GPU Backend | Cluster Pooling (RPC) | Cloud APIs | Release Package |
+| :--- | :--- | :--- | :--- | :--- |
+| **Windows PC** | ✅ NVIDIA CUDA / AVX2 CPU | ✅ Coordinator + Worker | ✅ Yes | [`PrivateLM-Mesh-Windows-x64.zip`](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.1.0-mesh/PrivateLM-Mesh-Windows-x64.zip) |
+| **macOS** | ✅ Apple Silicon Metal | ✅ Coordinator + Worker | ✅ Yes | [`PrivateLM-Mesh-macOS.zip`](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.1.0-mesh/PrivateLM-Mesh-macOS.zip) |
+| **Linux x64** | ✅ Vulkan / AVX-512 CPU | ✅ Coordinator + Worker | ✅ Yes | [`PrivateLM-Mesh-Linux-x64.tar.gz`](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.1.0-mesh/PrivateLM-Mesh-Linux-x64.tar.gz) |
+| **Android** | ✅ Vulkan / NEON (ARM64) | ✅ Mobile Coordinator | ✅ Yes | [`PrivateLM-Mesh-Android.apk`](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.1.0-mesh/PrivateLM-Mesh-Android.apk) |
+| **iOS / iPad** | ✅ Apple Metal | 🔄 In Progress | ✅ Yes | AltStore IPA |
+| **Headless Workers** | ✅ CUDA / Metal / CPU | ✅ Dedicated Worker | ➖ | [`PrivateLM-Mesh-Worker-Windows-x64.zip`](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.1.0-mesh/PrivateLM-Mesh-Worker-Windows-x64.zip), `rpc-server-*` |
+| **Rust Daemons** | ⚡ Zero-dependency | 📡 Auto-Discovery | ➖ | `privatelm-mesh-daemon-*.zip/tar.gz` |
+
+---
+
+## How Cluster Resource Pooling Works
+
+When loading a large GGUF model that exceeds the VRAM of a single machine (e.g. 32B or 70B parameter models):
+
+```
+                       ┌─────────────────────────┐
+                       │   Coordinator Node      │
+                       │   (Windows / Mac /      │
+                       │    Linux / Android)     │
+                       └────────────┬────────────┘
+                                    │ ggml-rpc
+                 ┌──────────────────┴──────────────────┐
+                 ▼                                     ▼
+      ┌────────────────────┐                ┌────────────────────┐
+      │  Worker Node 1     │                │  Worker Node 2     │
+      │  (NVIDIA RTX PC)   │                │  (Apple Silicon)   │
+      │  rpc-server:50052  │                │  rpc-server:50052  │
+      └────────────────────┘                └────────────────────┘
+```
+
+1. **Launch Workers**: On worker machines, launch either the GUI client, the headless `rpc-server`, or the Rust daemon:
+   ```bash
+   # Start worker on port 50052
+   rpc-server -H 0.0.0.0 -p 50052 -m 16G
+   ```
+2. **Auto-Discovery or Manual Add**: In the coordinator's **Cluster Settings**, discovered nodes will appear automatically via mDNS, or you can add `IP:PORT` directly.
+3. **Distributed Execution**: The coordinator offloads layers across the pool, streaming activations over the local high-speed network.
+
+---
+
+## Build Configuration
+
+### Prerequisites
+- Flutter SDK >=3.3.0
+- CMake >= 3.24
+- C++20 compiler (MSVC on Windows, Clang on macOS, GCC/Clang on Linux)
+- Rust & Cargo (for `privatelm-mesh-daemon`)
+
+### Windows Desktop
+```powershell
+flutter pub get
+flutter build windows --release
+```
+
+### macOS Desktop
+```bash
+flutter pub get
+flutter build macos --release
+```
+
+### Linux Desktop
+```bash
+flutter pub get
+flutter build linux --release
+```
+
+### Rust Daemon
+```bash
+cd crates/privatelm-mesh-daemon
+cargo build --release
+```
+
+### Android APK
+```bash
+flutter pub get
+flutter build apk --release
+```
 
 ### iOS / iPad (Installation via AltServer)
 The iOS/iPad release is distributed as a sideloadable IPA file. Due to the RAM requirements for local models, iPad is the recommended iOS target, but it can be installed on iPhones.
