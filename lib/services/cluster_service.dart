@@ -11,39 +11,59 @@ import 'package:llama_flutter_android/llama_flutter_android.dart';
 
 import '../core/constants.dart';
 import '../core/ui.dart';
+import '../models/transport_type.dart';
+import 'adb_bridge_service.dart';
 import 'app_log_service.dart';
 import 'hive_service.dart';
+import 'mesh_discovery_service.dart';
+import 'network_transport_service.dart';
 
-/// What this phone does in a phone cluster.
+/// What this node does in the heterogeneous mesh cluster.
 enum ClusterRole {
   off,
 
-  /// Runs the model, with part of it on the workers.
+  /// Runs the model, coordinating layers across workers and local GPU/CPU.
   master,
 
-  /// Lends its processor and memory to a master.
+  /// Lends its GPU, processor, and memory to a coordinator.
   worker,
 }
 
-/// One phone's part of the loaded model.
+/// One node's part of the loaded model.
 class ClusterShare {
   final String name;
   final double mb;
   final bool isThisPhone;
-  const ClusterShare(this.name, this.mb, {this.isThisPhone = false});
+  final TransportType transportType;
+  const ClusterShare(
+    this.name,
+    this.mb, {
+    this.isThisPhone = false,
+    this.transportType = TransportType.unknown,
+  });
 }
 
-/// A phone the master can put layers on, for planning a load.
-class _Phone {
-  final ClusterWorker? worker; // null: the master itself
+/// A node the master can place model layers on.
+class ClusterNodeAllocation {
+  final ClusterWorker? worker; // null: the coordinator itself
   final double capacityMb;
   final double speed; // GB/s
+  final TransportType transportType;
+  final double latencyMs;
   double assignedMb = 0;
-  _Phone(this.worker, this.capacityMb, this.speed);
+
+  ClusterNodeAllocation({
+    required this.worker,
+    required this.capacityMb,
+    required this.speed,
+    this.transportType = TransportType.unknown,
+    this.latencyMs = 1.0,
+  });
 }
 
-/// Phone cluster: spread a GGUF model across phones on the same Wi-Fi.
-/// The master runs the model; workers hold part of its layers.
+/// Heterogeneous Mesh Cluster Service:
+/// Pools memory (VRAM / RAM) and compute across PCs, Macs, Linux servers, and mobile devices
+/// over USB, Ethernet, and Wi-Fi using `llama.cpp`'s `ggml-rpc`.
 class ClusterService extends GetxService {
   final HiveService _hive = Get.find<HiveService>();
 
@@ -70,17 +90,20 @@ class ClusterService extends GetxService {
   final found = <ClusterWorker>[].obs;
   final isScanning = false.obs;
 
-  /// This phone's worker service.
+  /// Active scheduling strategy (Topology & Latency Optimized by default).
+  final schedulerStrategy = ClusterSchedulerStrategy.topologyLatency.obs;
+
+  /// This device's worker service.
   final worker = const ClusterWorkerStatus(state: 'stopped').obs;
   final _workerRequested = false.obs;
 
   /// The API server is running (other devices, e.g. a PC, use the model).
   final serving = false.obs;
 
-  /// This phone's Wi-Fi address, or null when it isn't on Wi-Fi.
+  /// This device's primary network IP address.
   final wifiAddress = RxnString();
 
-  /// How the loaded model is spread across phones; empty when it isn't.
+  /// How the loaded model is spread across cluster nodes.
   final split = <ClusterShare>[].obs;
 
   String deviceName = '';
@@ -104,6 +127,10 @@ class ClusterService extends GetxService {
   void onInit() {
     super.onInit();
     enabled.value = _hive.getSetting<bool>(AppConstants.keyClusterEnabled) ?? false;
+    final savedStrat = _hive.getSetting<String>(AppConstants.keyClusterSchedulerStrategy);
+    if (savedStrat != null) {
+      schedulerStrategy.value = ClusterSchedulerStrategyExt.fromString(savedStrat);
+    }
     final saved = _hive.getSetting<List>(AppConstants.keyClusterWorkers) ?? const [];
     workers.assignAll(saved.whereType<Map>().map(ClusterWorker.fromMap));
     if (isSupported) {
@@ -283,6 +310,27 @@ class ClusterService extends GetxService {
 
   Future<String?> addFound(ClusterWorker w) => _add(w);
 
+  /// Adds a peer node discovered via Mesh UDP Beacon.
+  Future<String?> addMeshNode(MeshNode node) async {
+    final worker = ClusterWorker(
+      name: node.name,
+      host: node.host,
+      port: node.port,
+      ramMb: (node.freeRamGB * 1024).round(),
+      model: '${node.deviceType} ${node.gpuName.isNotEmpty ? "(${node.gpuName})" : ""}'.trim(),
+      id: node.id,
+      deviceType: node.deviceType,
+      transportType: node.transportType,
+      hardwareBackend: node.hardwareBackend,
+    );
+    return _add(worker);
+  }
+
+  void setSchedulerStrategy(ClusterSchedulerStrategy strategy) {
+    schedulerStrategy.value = strategy;
+    _hive.setSetting(AppConstants.keyClusterSchedulerStrategy, strategy.id);
+  }
+
   /// Finds saved workers that no longer answer at their address (they moved
   /// to another Wi-Fi, a hotspot, or got a new IP) by their device ID on
   /// the network, and updates them. Returns the ones still unreachable.
@@ -314,14 +362,44 @@ class ClusterService extends GetxService {
 
   Future<String?> _add(ClusterWorker worker) async {
     if (!await LlamaCluster.probe(worker.endpoint)) {
-      return 'Can\'t reach ${worker.endpoint}. Check that the phone is a worker '
-          'and on the same Wi-Fi.';
+      return 'Can\'t reach ${worker.endpoint}. Check that the device is running a worker '
+          'and reachable on the network.';
     }
-    workers.removeWhere((w) => w.endpoint == worker.endpoint);
-    workers.add(worker);
-    found.removeWhere((w) => w.endpoint == worker.endpoint);
+
+    // Probe latency & detect transport type
+    final latency = await NetworkTransportService.instance.measureLatency(worker.host, worker.port) ?? 10.0;
+    final transport = await NetworkTransportService.instance.classifyEndpoint(worker.host);
+
+    final enriched = worker.movedTo(
+      worker.host,
+      worker.port,
+      transportType: transport.id,
+      latencyMs: latency,
+    );
+
+    workers.removeWhere((w) => w.endpoint == enriched.endpoint);
+    workers.add(enriched);
+    found.removeWhere((w) => w.endpoint == enriched.endpoint);
     await _save();
     return null;
+  }
+
+  /// Automatically scan and bridge all USB-C connected phones via ADB.
+  Future<int> autoBridgeUsbDevices() async {
+    final adb = Get.isRegistered<AdbBridgeService>() ? Get.find<AdbBridgeService>() : null;
+    if (adb == null) return 0;
+
+    final devices = await adb.scanUsbDevices();
+    var bridged = 0;
+    for (final dev in devices) {
+      final success = await adb.forwardDevicePort(dev);
+      if (success) {
+        final worker = adb.toClusterWorker(dev);
+        await _add(worker);
+        bridged++;
+      }
+    }
+    return bridged;
   }
 
   Future<void> remove(ClusterWorker w) async {
@@ -331,13 +409,14 @@ class ClusterService extends GetxService {
 
   bool isAdded(ClusterWorker w) => workers.any((s) => s.endpoint == w.endpoint);
 
-  /// Looks for workers on the Wi-Fi (doesn't work on every router).
+  /// Looks for workers on the Wi-Fi or LAN.
   Future<void> scanNearby() async {
     if (isScanning.value) return;
     isScanning.value = true;
     try {
       final list = await LlamaCluster.discover();
       found.assignAll(list.where((w) => !isAdded(w)));
+      await autoBridgeUsbDevices();
     } finally {
       isScanning.value = false;
     }
@@ -351,18 +430,9 @@ class ClusterService extends GetxService {
   Future<void> _save() => _hive.setSetting(
       AppConstants.keyClusterWorkers, [for (final w in workers) w.toMap()]);
 
-  // ── Master: loading ────────────────────────────────────────────────────
+  // ── Master: loading & scheduling ───────────────────────────────────────
 
-  /// Plans a GGUF load right before it starts and hands the plan to the
-  /// native engine (or turns cluster mode off for it). Returns the number of
-  /// workers used; throws with a readable message if the model won't fit
-  /// or a worker can't be reached.
-  ///
-  /// If the model fits on this phone, asks whether to keep it here (faster:
-  /// no Wi-Fi in the loop) or share it with the workers anyway. Otherwise
-  /// the fastest phones are filled first, up to their free memory: phones
-  /// take turns on every token, so the most work belongs on the fastest one,
-  /// and phones that aren't needed are left out (one less Wi-Fi hop each).
+  /// Plans a GGUF load across heterogeneous nodes with transport awareness.
   Future<int> applyForNextLoad(String modelPath, {String? modelName}) async {
     split.clear();
     if (!isSupported) return 0;
@@ -371,56 +441,90 @@ class ClusterService extends GetxService {
       return 0;
     }
 
-    // Workers that are off or away are left out, not fatal: the model may
-    // fit without them.
     final offline = await relocateWorkers();
     final available = workers.where((w) => !offline.any((o) => o.endpoint == w.endpoint)).toList();
     if (offline.isNotEmpty) {
       final names = offline.map((w) => w.model ?? w.name).join(', ');
-      showToast('Phone cluster', 'Not reachable, loading without: $names');
+      showToast('Mesh Cluster', 'Not reachable, loading without: $names');
     }
 
     final modelMb = await File(modelPath).length() / (1024 * 1024);
     final needMb = modelMb * 1.1; // + KV cache and working buffers
     _localSpeed ??= await LlamaCluster.benchmark();
-    // Free RAM: workers report theirs when they start. The master also runs
-    // the app and the KV cache, so it offers less of its own.
-    final master = _Phone(null, await LlamaCluster.localFreeRamMb() * 0.7, _localSpeed!);
-    final phones = [
+
+    // Coordinator node allocation
+    final localFreeMb = await LlamaCluster.localFreeRamMb() * 0.75;
+    final master = ClusterNodeAllocation(
+      worker: null,
+      capacityMb: localFreeMb,
+      speed: _localSpeed!,
+      transportType: TransportType.unknown,
+      latencyMs: 0.0,
+    );
+
+    final nodes = <ClusterNodeAllocation>[
       master,
       for (final w in available)
-        _Phone(w, (w.ramMb ?? 2000) * 0.75, w.bandwidth ?? _unknownSpeed),
+        ClusterNodeAllocation(
+          worker: w,
+          capacityMb: (w.ramMb ?? 2000) * 0.75,
+          speed: w.bandwidth ?? _unknownSpeed,
+          transportType: TransportTypeExt.fromString(w.transportType),
+          latencyMs: w.latencyMs ?? 15.0,
+        ),
     ];
-    final totalMb = phones.fold<double>(0, (a, p) => a + p.capacityMb);
+
+    final totalMb = nodes.fold<double>(0, (a, p) => a + p.capacityMb);
     if (needMb > totalMb) {
       throw Exception('This model (${_gb(modelMb)}) is too big for these '
-          '${phones.length} phones: together they have about ${_gb(totalMb)} '
+          '${nodes.length} devices: together they have about ${_gb(totalMb)} '
           'free.${offline.isEmpty ? '' : ' Not reachable: ${offline.map((w) => w.model ?? w.name).join(', ')}.'} '
-          'Add another worker, close apps on the phones, or pick a '
-          'smaller model.');
+          'Add another worker, close background apps, or pick a smaller model.');
     }
 
     if (available.isEmpty) {
       await LlamaCluster.clear();
       return 0;
     }
-    if (needMb <= master.capacityMb) {
-      final share = await _askFitsHere(
-          modelName ?? modelPath.split('/').last, modelMb, available.length);
-      if (!share) {
-        await LlamaCluster.clear();
-        return 0;
-      }
-      _splitBySpeed(phones, needMb);
-    } else {
-      _fillFastestFirst(phones, needMb);
+
+    // Apply selected scheduler strategy
+    final strategy = schedulerStrategy.value;
+    switch (strategy) {
+      case ClusterSchedulerStrategy.topologyLatency:
+        _fillTopologyAware(nodes, needMb);
+        break;
+      case ClusterSchedulerStrategy.throughputWeighted:
+        _splitBySpeed(nodes, needMb);
+        break;
+      case ClusterSchedulerStrategy.capacityBalanced:
+        _fillFastestFirst(nodes, needMb);
+        break;
     }
 
-    final used = phones.where((p) => p.worker != null && p.assignedMb > 0).toList();
+    final used = nodes.where((p) => p.worker != null && p.assignedMb > 0).toList();
+
+    // Populate visual split presentation
+    split.assignAll([
+      if (master.assignedMb > 0)
+        ClusterShare(
+          'This Device (Local)',
+          master.assignedMb,
+          isThisPhone: true,
+          transportType: TransportType.unknown,
+        ),
+      for (final u in used)
+        ClusterShare(
+          u.worker!.name,
+          u.assignedMb,
+          transportType: u.transportType,
+        ),
+    ]);
+
     if (used.isEmpty) {
       await LlamaCluster.clear();
       return 0;
     }
+
     try {
       await LlamaCluster.setCluster(
         [for (final p in used) p.worker!],
@@ -429,15 +533,42 @@ class ClusterService extends GetxService {
       );
     } on PlatformException catch (e) {
       throw Exception(
-          '${e.message ?? 'A worker is unreachable'}. Turn on Worker on that '
-          'phone, or set this phone\'s Phone cluster to Off.');
+          '${e.message ?? 'A worker is unreachable'}. Check connection or '
+          'turn off Mesh Cluster in settings.');
     }
     return used.length;
   }
 
-  /// Fastest first, each up to its free memory, until the model is placed.
-  static void _fillFastestFirst(List<_Phone> phones, double needMb) {
-    final bySpeed = [...phones]..sort((a, b) => b.speed.compareTo(a.speed));
+  /// Topology & Latency-Aware Scheduler:
+  /// Packs layers into contiguous blocks along interconnect priority tiers:
+  /// Local (Tier 0) -> USB (Tier 1) -> Ethernet (Tier 2) -> Wi-Fi (Tier 3).
+  /// Excludes Wi-Fi nodes completely when model fits into low-latency tiers.
+  static void _fillTopologyAware(List<ClusterNodeAllocation> nodes, double needMb) {
+    // Sort ascending by priority tier (Tier 0/1/2 first), then descending by speed
+    final sorted = [...nodes]..sort((a, b) {
+        final tierA = a.worker == null ? 0 : a.transportType.priorityTier;
+        final tierB = b.worker == null ? 0 : b.transportType.priorityTier;
+        if (tierA != tierB) return tierA.compareTo(tierB);
+        return b.speed.compareTo(a.speed);
+      });
+
+    // Reset assigned MB
+    for (final n in sorted) {
+      n.assignedMb = 0;
+    }
+
+    var left = needMb;
+    for (final node in sorted) {
+      if (left <= 0.0) break;
+      final alloc = math.min(node.capacityMb, left);
+      node.assignedMb = alloc;
+      left -= alloc;
+    }
+  }
+
+  /// Fastest first, each up to its free memory.
+  static void _fillFastestFirst(List<ClusterNodeAllocation> nodes, double needMb) {
+    final bySpeed = [...nodes]..sort((a, b) => b.speed.compareTo(a.speed));
     var left = needMb;
     for (final p in bySpeed) {
       p.assignedMb = math.min(p.capacityMb, left);
@@ -445,13 +576,13 @@ class ClusterService extends GetxService {
     }
   }
 
-  /// Shares in proportion to speed, capped at each phone's free memory
-  /// (what a capped phone can't take goes to the others).
-  static void _splitBySpeed(List<_Phone> phones, double needMb) {
-    var open = [...phones];
+  /// Shares in proportion to speed, capped at each node's free memory.
+  static void _splitBySpeed(List<ClusterNodeAllocation> nodes, double needMb) {
+    var open = [...nodes];
     var left = needMb;
     while (open.isNotEmpty && left > 0.5) {
       final speedSum = open.fold<double>(0, (a, p) => a + p.speed);
+      if (speedSum <= 0) break;
       final capped = [
         for (final p in open)
           if (p.assignedMb + left * p.speed / speedSum >= p.capacityMb) p,

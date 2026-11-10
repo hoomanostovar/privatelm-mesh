@@ -1,17 +1,21 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:archive/archive.dart';
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
+import '../core/constants.dart';
+import '../models/hardware_acceleration.dart';
 import 'device_info_service.dart';
+import 'hive_service.dart';
 import 'package:llama_flutter_android/llama_flutter_android.dart' show ChatMessage;
 import 'inference_android.dart' show LoadResult;
 
 /// Desktop inference engine for Windows, macOS, and Linux.
 ///
 /// Runs llama.cpp `llama-server` as a local subprocess on port 50051,
-/// providing native GPU hardware acceleration (CUDA on Windows, Metal on macOS,
-/// Vulkan on Linux) and cluster pooling via `--rpc`.
+/// providing native GPU hardware acceleration (CUDA, ROCm, Vulkan, DirectML, Metal)
+/// and cluster pooling via `--rpc`. Self-provisions engine if missing.
 class DesktopInferenceEngine {
   static final DesktopInferenceEngine instance = DesktopInferenceEngine._();
   DesktopInferenceEngine._();
@@ -23,6 +27,7 @@ class DesktopInferenceEngine {
   String _currentModelPath = '';
   String _currentGpuName = '';
   int _currentGpuLayers = 0;
+  ComputeBackend _activeBackend = ComputeBackend.auto;
   static const int port = 50051;
 
   bool get isModelLoaded => _isModelLoaded;
@@ -30,18 +35,39 @@ class DesktopInferenceEngine {
   String get currentModelPath => _currentModelPath;
   String get gpuName => _currentGpuName;
   int get gpuLayers => _currentGpuLayers;
+  ComputeBackend get activeBackend => _activeBackend;
+
+  /// Default application engine storage directory.
+  static String getEngineDirectory() {
+    final sep = Platform.pathSeparator;
+    if (Platform.isWindows) {
+      final local = Platform.environment['LOCALAPPDATA'] ?? 'C:\\Users\\Default\\AppData\\Local';
+      return '$local${sep}PrivateLM${sep}engine';
+    } else if (Platform.isMacOS) {
+      final home = Platform.environment['HOME'] ?? '';
+      return '$home${sep}Library${sep}Application Support${sep}PrivateLM${sep}engine';
+    } else {
+      final home = Platform.environment['HOME'] ?? '';
+      return '$home${sep}.local${sep}share${sep}PrivateLM${sep}engine';
+    }
+  }
 
   /// Find the built `llama-server` binary on disk.
   static String? findBinary() {
     final execDir = File(Platform.resolvedExecutable).parent.path;
     final exeName = Platform.isWindows ? 'llama-server.exe' : 'llama-server';
     final sep = Platform.pathSeparator;
+    final engineDir = getEngineDirectory();
 
     final candidates = [
       '$execDir$sep$exeName',
+      '$execDir${sep}bin$sep$exeName',
       '$execDir${sep}data$sep$exeName',
       '$execDir${sep}..${sep}Resources$sep$exeName',
+      '$engineDir$sep$exeName',
       '${Directory.current.path}${sep}bin$sep$exeName',
+      '${Directory.current.path}${sep}build\\windows\\x64\\runner\\Release$sep$exeName',
+      '${Directory.current.path}${sep}build\\windows\\x64\\runner\\Debug$sep$exeName',
       '${Directory.current.path}${sep}build_desktop${sep}build${sep}bin${sep}Release$sep$exeName',
       '${Directory.current.path}${sep}build_desktop${sep}build${sep}bin$sep$exeName',
     ];
@@ -52,41 +78,149 @@ class DesktopInferenceEngine {
     return null;
   }
 
-  /// Start `llama-server` with the model, GPU layers, and cluster workers.
+  /// Automatically provisions the prebuilt engine from GitHub Releases if missing.
+  static Future<String?> autoProvisionEngine({void Function(double)? onProgress}) async {
+    final engineDir = getEngineDirectory();
+    final sep = Platform.pathSeparator;
+    final exeName = Platform.isWindows ? 'llama-server.exe' : 'llama-server';
+    final targetExe = '$engineDir$sep$exeName';
+
+    if (File(targetExe).existsSync()) return targetExe;
+
+    final dir = Directory(engineDir);
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+
+    String assetName;
+    if (Platform.isWindows) {
+      assetName = 'PrivateLM-Mesh-Windows-x64.zip';
+    } else if (Platform.isMacOS) {
+      assetName = 'PrivateLM-Mesh-macOS.zip';
+    } else {
+      assetName = 'PrivateLM-Mesh-Linux-x64.tar.gz';
+    }
+
+    final downloadUrl =
+        'https://github.com/${AppConstants.githubRepo}/releases/download/v1.1.0-mesh/$assetName';
+    final client = http.Client();
+    try {
+      print('[DesktopEngine] Auto-provisioning engine from $downloadUrl...');
+      final request = http.Request('GET', Uri.parse(downloadUrl));
+      final response = await client.send(request);
+
+      if (response.statusCode != 200) {
+        print('[DesktopEngine] Download returned ${response.statusCode}');
+        return null;
+      }
+
+      final totalBytes = response.contentLength ?? 25000000;
+      var receivedBytes = 0;
+      final bytesBuilder = BytesBuilder();
+
+      await for (final chunk in response.stream) {
+        bytesBuilder.add(chunk);
+        receivedBytes += chunk.length;
+        if (onProgress != null && totalBytes > 0) {
+          final progress = (receivedBytes / totalBytes).clamp(0.0, 1.0);
+          onProgress(0.02 + progress * 0.15);
+        }
+      }
+
+      final downloadedBytes = bytesBuilder.takeBytes();
+      if (assetName.endsWith('.zip')) {
+        final archive = ZipDecoder().decodeBytes(downloadedBytes);
+        for (final file in archive) {
+          if (file.isFile) {
+            final filename = file.name.split('/').last;
+            if (filename.endsWith('.exe') || filename.endsWith('.dll') || filename == 'llama-server') {
+              final outFile = File('$engineDir$sep$filename');
+              outFile.writeAsBytesSync(file.content as List<int>);
+            }
+          }
+        }
+      }
+
+      if (File(targetExe).existsSync()) {
+        if (!Platform.isWindows) {
+          Process.runSync('chmod', ['+x', targetExe]);
+        }
+        return targetExe;
+      }
+    } catch (e) {
+      print('[DesktopEngine] Engine auto-provisioning failed: $e');
+    } finally {
+      client.close();
+    }
+    return null;
+  }
+
+  /// Start `llama-server` with the model, GPU layers, hardware acceleration, and cluster workers.
   Future<LoadResult> loadModel({
     required String modelPath,
-    int threads = 4,
+    int threads = 0,
     int contextSize = 2048,
-    int gpuLayers = 0,
+    int gpuLayers = -1,
     String? mmprojPath,
     List<String>? rpcEndpoints,
     void Function(double)? onProgress,
   }) async {
     await unloadModel();
 
-    final binary = findBinary();
+    var binary = findBinary();
     if (binary == null) {
-      return LoadResult(
-        success: false,
-        message: 'llama-server binary not found on desktop. Please build desktop engine.',
-      );
+      onProgress?.call(0.02);
+      binary = await autoProvisionEngine(onProgress: onProgress);
+      if (binary == null) {
+        return LoadResult(
+          success: false,
+          message: 'llama-server binary could not be found or downloaded. Please check network connection.',
+        );
+      }
     }
 
     final dev = Get.isRegistered<DeviceInfoService>()
         ? Get.find<DeviceInfoService>()
         : null;
+    final hive = Get.isRegistered<HiveService>() ? Get.find<HiveService>() : null;
+
     final detectedGpu = dev?.gpuName.value ?? '';
     final hasGpu = detectedGpu.isNotEmpty;
-    final effectiveGpuLayers = hasGpu && gpuLayers > 0 ? gpuLayers : (hasGpu ? 99 : 0);
+
+    // Read user hardware acceleration preferences from settings
+    final savedBackendStr = hive?.getSetting<String>(AppConstants.keyComputeBackend);
+    final preferredBackend = ComputeBackendExt.fromString(savedBackendStr);
+    _activeBackend = preferredBackend == ComputeBackend.auto
+        ? (dev?.recommendedBackend ?? ComputeBackend.auto)
+        : preferredBackend;
+
+    // Read user-configured GPU offload layers or use auto
+    final savedGpuLayers = hive?.getSetting<int>(AppConstants.keyGpuLayers) ?? gpuLayers;
+    final effectiveGpuLayers = savedGpuLayers >= 0
+        ? savedGpuLayers
+        : (_activeBackend.isGpu && hasGpu ? 99 : (hasGpu ? 99 : 0));
+
+    // Read thread configuration
+    final configuredThreads = hive?.getSetting<int>(AppConstants.keyInferenceThreads) ?? 0;
+    final effectiveThreads = configuredThreads > 0
+        ? configuredThreads
+        : (threads > 0 ? threads : (Platform.numberOfProcessors > 2 ? Platform.numberOfProcessors - 1 : 2));
+
+    // Read flash attention configuration
+    final flashAttention = hive?.getSetting<bool>(AppConstants.keyFlashAttention, defaultValue: true) ?? true;
+    final batchSize = hive?.getSetting<int>(AppConstants.keyBatchSize, defaultValue: 512) ?? 512;
 
     final args = <String>[
       '--model', modelPath,
       '--port', '$port',
       '--host', '127.0.0.1',
       '--ctx-size', '$contextSize',
-      '--threads', '$threads',
+      '--threads', '$effectiveThreads',
       '--n-gpu-layers', '$effectiveGpuLayers',
+      '--batch-size', '$batchSize',
     ];
+
+    if (flashAttention && _activeBackend.isGpu) {
+      args.add('--flash-attn');
+    }
 
     if (mmprojPath != null && File(mmprojPath).existsSync()) {
       args.addAll(['--mmproj', mmprojPath]);
@@ -96,7 +230,7 @@ class DesktopInferenceEngine {
       args.addAll(['--rpc', rpcEndpoints.join(',')]);
     }
 
-    print('[DesktopEngine] Launching: $binary ${args.join(' ')}');
+    print('[DesktopEngine] Launching ($activeBackend): $binary ${args.join(' ')}');
     onProgress?.call(0.1);
 
     try {
@@ -165,7 +299,9 @@ class DesktopInferenceEngine {
 
       onProgress?.call(1.0);
 
-      final backendStr = effectiveGpuLayers > 0 ? 'GPU ($detectedGpu)' : 'CPU';
+      final backendStr = effectiveGpuLayers > 0
+          ? '${_activeBackend.displayName} ($detectedGpu)'
+          : _activeBackend.displayName;
       return LoadResult(
         success: true,
         message: 'Model loaded on $backendStr ($effectiveGpuLayers layers).',

@@ -1,4 +1,4 @@
-# Build script for Windows Desktop (llama.cpp + ggml-rpc-server)
+﻿# Build script for Windows Desktop (llama.cpp + ggml-rpc-server)
 # Usage: .\scripts\build_desktop_engine.ps1 [-Cuda] [-Vulkan]
 
 param (
@@ -51,10 +51,21 @@ if ($Cuda) {
 Write-Host "--> Running CMake Configuration..." -ForegroundColor Gray
 cmake @CmakeArgs
 
-Write-Host "--> Building Target ggml-rpc-server..." -ForegroundColor Gray
-cmake --build $BuildDir --config $BuildType --target ggml-rpc-server -j $env:NUMBER_OF_PROCESSORS
+Write-Host "--> Building Targets llama-server and ggml-rpc-server..." -ForegroundColor Gray
+cmake --build $BuildDir --config $BuildType --target llama-server ggml-rpc-server -j $env:NUMBER_OF_PROCESSORS
 
-# Copy output binaries to bin/
+# Copy output binaries and DLLs to bin/
+$ServerCandidates = @(
+    (Join-Path $BuildDir "bin\$BuildType\llama-server.exe"),
+    (Join-Path $BuildDir "bin\llama-server.exe")
+)
+foreach ($Cand in $ServerCandidates) {
+    if (Test-Path $Cand) {
+        Copy-Item $Cand -Destination (Join-Path $BinDir "llama-server.exe") -Force
+        break
+    }
+}
+
 $Candidates = @(
     (Join-Path $BuildDir "bin\$BuildType\ggml-rpc-server.exe"),
     (Join-Path $BuildDir "bin\ggml-rpc-server.exe"),
@@ -75,12 +86,21 @@ if ($FoundExe) {
     Copy-Item $FoundExe -Destination (Join-Path $BinDir "ggml-rpc-server.exe") -Force
     
     # Copy supporting runtime DLLs
-    $Dlls = Get-ChildItem -Path (Split-Path -Parent $FoundExe) -Filter "*.dll"
-    foreach ($Dll in $Dlls) {
-        Copy-Item $Dll.FullName -Destination $BinDir -Force
+    $DllDirs = @(
+        (Split-Path -Parent $FoundExe),
+        (Join-Path $BuildDir "bin\$BuildType"),
+        (Join-Path $BuildDir "bin")
+    )
+    foreach ($d in $DllDirs) {
+        if (Test-Path $d) {
+            $Dlls = Get-ChildItem -Path $d -Filter "*.dll"
+            foreach ($Dll in $Dlls) {
+                Copy-Item $Dll.FullName -Destination $BinDir -Force
+            }
+        }
     }
     
-    Write-Host "[✓] Successfully built and installed: $BinDir\rpc-server.exe (with runtime DLLs)" -ForegroundColor Green
+    Write-Host "[✓] Successfully built and installed: $BinDir\llama-server.exe and rpc-server.exe (with runtime DLLs)" -ForegroundColor Green
 } else {
     Write-Warning "RPC server binary not found at standard build output paths. Check $($BuildDir)\bin"
 }

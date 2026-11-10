@@ -94,6 +94,12 @@ jobs:
       - name: Build Windows Desktop Release
         run: flutter build windows --release
 
+      - name: Build Windows Desktop Engine
+        shell: pwsh
+        run: |
+          .\scripts\build_desktop_engine.ps1
+          Copy-Item bin\* build\windows\x64\runner\Release\ -Force
+
       - name: Package Windows Bundle
         shell: pwsh
         run: |

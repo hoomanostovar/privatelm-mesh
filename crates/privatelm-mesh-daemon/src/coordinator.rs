@@ -9,6 +9,10 @@
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+fn default_transport() -> String {
+    "unknown".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClusterNode {
     pub id: String,
@@ -18,6 +22,8 @@ pub struct ClusterNode {
     pub bandwidth_gbps: f64,
     pub latency_ms: f64,
     pub is_local: bool,
+    #[serde(default = "default_transport")]
+    pub transport_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +52,8 @@ impl ClusterCoordinator {
     ///
     /// Implements weighted latency-aware pipeline splitting:
     /// - High bandwidth nodes are weighted higher.
-    /// - Network latency acts as a dampener (slow network links receive fewer or zero layers).
+    /// - Direct interconnects (Local, USB-C via ADB, Gigabit Ethernet) are tiered above Wi-Fi.
+    /// - If the model fits within wired/direct tiers, Wi-Fi nodes are gated to prevent activation latency penalties.
     pub fn plan_distribution(
         mut nodes: Vec<ClusterNode>,
         model_size_mb: f64,
@@ -67,13 +74,39 @@ impl ClusterCoordinator {
             ));
         }
 
-        // Calculate node score: Bandwidth / (1.0 + Latency penalty)
-        // Local node has 0 latency penalty.
+        // Tiering: Local -> USB -> Ethernet -> Wi-Fi
+        // If the model fits completely within Local + USB + Ethernet,
+        // gate Wi-Fi nodes to eliminate activation round-trip latency overhead.
+        let low_latency_capacity: f64 = nodes
+            .iter()
+            .filter(|n| n.is_local || n.transport_type == "usb" || n.transport_type == "ethernet" || n.latency_ms <= 2.0)
+            .map(|n| n.capacity_mb)
+            .sum();
+
+        let gate_wifi = needed_mb <= low_latency_capacity;
+
+        // Calculate node score: (Bandwidth * Transport Multiplier) / (1.0 + Latency penalty)
         let mut scored_nodes: Vec<(ClusterNode, f64)> = nodes
             .into_iter()
+            .filter(|node| {
+                if gate_wifi && !node.is_local && node.transport_type == "wifi" && node.latency_ms > 2.0 {
+                    return false;
+                }
+                true
+            })
             .map(|node| {
-                let latency_penalty = if node.is_local { 0.0 } else { (node.latency_ms / 15.0).max(0.1) };
-                let score = node.bandwidth_gbps / (1.0 + latency_penalty);
+                let transport_mult = match node.transport_type.as_str() {
+                    "usb" => 3.0,
+                    "ethernet" => 2.0,
+                    _ if node.is_local => 4.0,
+                    _ => 1.0,
+                };
+                let latency_penalty = if node.is_local {
+                    0.0
+                } else {
+                    (node.latency_ms / 10.0).max(0.05)
+                };
+                let score = (node.bandwidth_gbps * transport_mult) / (1.0 + latency_penalty);
                 (node, score)
             })
             .collect();
@@ -125,7 +158,7 @@ impl ClusterCoordinator {
             total_model_mb: model_size_mb,
             total_layers,
             allocations,
-            expected_tokens_per_sec: 12.5, // Estimation baseline
+            expected_tokens_per_sec: 14.0, // Baseline estimate
         };
 
         info!(
@@ -136,6 +169,82 @@ impl ClusterCoordinator {
         );
 
         Ok(plan)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gate_wifi_when_fits_in_usb_and_local() {
+        let nodes = vec![
+            ClusterNode {
+                id: "local".to_string(),
+                name: "PC (RTX 4090)".to_string(),
+                endpoint: "127.0.0.1:50051".to_string(),
+                capacity_mb: 16000.0,
+                bandwidth_gbps: 1008.0,
+                latency_ms: 0.0,
+                is_local: true,
+                transport_type: "unknown".to_string(),
+            },
+            ClusterNode {
+                id: "usb-phone".to_string(),
+                name: "Galaxy S24 (USB-C)".to_string(),
+                endpoint: "127.0.0.1:50052".to_string(),
+                capacity_mb: 8000.0,
+                bandwidth_gbps: 50.0,
+                latency_ms: 0.3,
+                is_local: false,
+                transport_type: "usb".to_string(),
+            },
+            ClusterNode {
+                id: "wifi-tablet".to_string(),
+                name: "Tablet (Wi-Fi)".to_string(),
+                endpoint: "192.168.1.150:50052".to_string(),
+                capacity_mb: 6000.0,
+                bandwidth_gbps: 30.0,
+                latency_ms: 25.0,
+                is_local: false,
+                transport_type: "wifi".to_string(),
+            },
+        ];
+
+        // 14 GB model fits in PC (16GB) + USB (8GB) = 24GB. Wi-Fi tablet should be gated!
+        let plan = ClusterCoordinator::plan_distribution(nodes, 14000.0, 32).unwrap();
+        assert_eq!(plan.allocations.len(), 1); // Fits completely in RTX 4090
+        assert_eq!(plan.allocations[0].node_id, "local");
+    }
+
+    #[test]
+    fn test_recruit_wifi_when_model_exceeds_wired() {
+        let nodes = vec![
+            ClusterNode {
+                id: "local".to_string(),
+                name: "PC".to_string(),
+                endpoint: "127.0.0.1:50051".to_string(),
+                capacity_mb: 8000.0,
+                bandwidth_gbps: 100.0,
+                latency_ms: 0.0,
+                is_local: true,
+                transport_type: "unknown".to_string(),
+            },
+            ClusterNode {
+                id: "wifi-laptop".to_string(),
+                name: "Laptop (Wi-Fi)".to_string(),
+                endpoint: "192.168.1.120:50052".to_string(),
+                capacity_mb: 16000.0,
+                bandwidth_gbps: 60.0,
+                latency_ms: 18.0,
+                is_local: false,
+                transport_type: "wifi".to_string(),
+            },
+        ];
+
+        // 18 GB model exceeds local PC (8GB), must recruit Wi-Fi laptop
+        let plan = ClusterCoordinator::plan_distribution(nodes, 18000.0, 40).unwrap();
+        assert_eq!(plan.allocations.len(), 2);
     }
 }
 

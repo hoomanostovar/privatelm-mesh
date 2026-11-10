@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
 
 import 'package:llama_flutter_android/llama_flutter_android.dart';
+import '../models/hardware_acceleration.dart';
 
 /// Detected SoC family.
 enum SocFamily {
@@ -143,6 +145,16 @@ Future<Map<String, dynamic>> getDeviceInfo() async {
   String gpuName = '';
   double gpuVramGB = 0.0;
   String deviceType = 'Phone';
+  final List<Map<String, dynamic>> gpus = [];
+  Map<String, dynamic> cpuInfo = {
+    'name': 'CPU',
+    'cores': Platform.numberOfProcessors,
+    'threads': Platform.numberOfProcessors,
+    'hasAvx2': true,
+    'hasAvx512': false,
+    'hasAmx': false,
+    'hasNeon': Platform.isMacOS || Platform.isAndroid || Platform.isIOS,
+  };
 
   try {
     if (Platform.isWindows) {
@@ -166,76 +178,159 @@ Future<Map<String, dynamic>> getDeviceInfo() async {
         availableRam = 8.0;
       }
 
-      // Query native Windows GPU via registry (instant, ~5ms)
+      // Query Windows CIM for all video controllers
       try {
-        for (var i = 0; i < 4; i++) {
-          final idx = i.toString().padLeft(4, '0');
-          final regResult = Process.runSync('reg', [
-            'query',
-            'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\$idx',
-            '/v',
-            'DriverDesc',
-          ]);
-          if (regResult.exitCode == 0) {
-            final match = RegExp(r'DriverDesc\s+REG_SZ\s+(.+)')
-                .firstMatch(regResult.stdout.toString());
-            if (match != null) {
-              final candidate = match.group(1)!.trim();
-              if (candidate.isNotEmpty && !candidate.toLowerCase().contains('virtual') && !candidate.toLowerCase().contains('basic render')) {
-                gpuName = candidate;
-                // Query VRAM
-                final vramResult = Process.runSync('reg', [
-                  'query',
-                  'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\$idx',
-                  '/v',
-                  'HardwareInformation.MemorySize',
-                ]);
-                if (vramResult.exitCode == 0) {
-                  final vramMatch = RegExp(r'HardwareInformation\.MemorySize\s+REG_DWORD\s+0x([0-9a-fA-F]+)')
-                      .firstMatch(vramResult.stdout.toString());
-                  if (vramMatch != null) {
-                    final bytes = int.tryParse(vramMatch.group(1)!, radix: 16) ?? 0;
-                    gpuVramGB = bytes / (1024 * 1024 * 1024);
-                  }
-                }
-                break;
-              }
+        final res = Process.runSync('powershell', [
+          '-NoProfile',
+          '-Command',
+          'Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM, DriverVersion, PNPDeviceID | ConvertTo-Json -Compress'
+        ]);
+        if (res.exitCode == 0 && res.stdout.toString().trim().isNotEmpty) {
+          final out = res.stdout.toString().trim();
+          final List<dynamic> items = out.startsWith('[')
+              ? jsonDecode(out)
+              : [jsonDecode(out)];
+
+          for (final item in items) {
+            final name = (item['Name'] as String?)?.trim() ?? '';
+            if (name.isEmpty ||
+                name.toLowerCase().contains('virtual') ||
+                name.toLowerCase().contains('basic render')) {
+              continue;
             }
+
+            final pnp = (item['PNPDeviceID'] as String?)?.toUpperCase() ?? '';
+            final rawBytes = (item['AdapterRAM'] as num?)?.toDouble() ?? 0.0;
+            // Handle signed 32-bit overflow in AdapterRAM (e.g. 4GB becomes negative or 0)
+            final vram = rawBytes > 0 ? rawBytes / (1024 * 1024 * 1024) : 4.0;
+            final driver = (item['DriverVersion'] as String?) ?? '';
+
+            var vendor = GpuVendor.other;
+            if (pnp.contains('VEN_10DE') || name.toLowerCase().contains('nvidia')) {
+              vendor = GpuVendor.nvidia;
+            } else if (pnp.contains('VEN_1002') || name.toLowerCase().contains('amd') || name.toLowerCase().contains('radeon')) {
+              vendor = GpuVendor.amd;
+            } else if (pnp.contains('VEN_8086') || name.toLowerCase().contains('intel')) {
+              vendor = GpuVendor.intel;
+            }
+
+            final gpuObj = GpuDeviceInfo(
+              name: name,
+              vendor: vendor,
+              vramGB: vram,
+              driverVersion: driver,
+              isDiscrete: vendor == GpuVendor.nvidia || (vendor == GpuVendor.amd && !name.toLowerCase().contains('graphics')),
+              supportedBackends: vendor.supportedBackends,
+            );
+            gpus.add(gpuObj.toMap());
           }
         }
       } catch (_) {}
 
-      // Fallback to CIM if registry wasn't resolved
-      if (gpuName.isEmpty) {
+      // Fallback to registry if CIM was empty
+      if (gpus.isEmpty) {
         try {
-          final res = Process.runSync('powershell', [
-            '-NoProfile',
-            '-Command',
-            '(Get-CimInstance Win32_VideoController | Select-Object -First 1).Name'
-          ]);
-          if (res.exitCode == 0 && res.stdout.toString().trim().isNotEmpty) {
-            gpuName = res.stdout.toString().trim();
+          for (var i = 0; i < 6; i++) {
+            final idx = i.toString().padLeft(4, '0');
+            final regResult = Process.runSync('reg', [
+              'query',
+              'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\$idx',
+              '/v',
+              'DriverDesc',
+            ]);
+            if (regResult.exitCode == 0) {
+              final match = RegExp(r'DriverDesc\s+REG_SZ\s+(.+)')
+                  .firstMatch(regResult.stdout.toString());
+              if (match != null) {
+                final candidate = match.group(1)!.trim();
+                if (candidate.isNotEmpty &&
+                    !candidate.toLowerCase().contains('virtual') &&
+                    !candidate.toLowerCase().contains('basic render')) {
+                  var vendor = GpuVendor.other;
+                  if (candidate.toLowerCase().contains('nvidia')) {
+                    vendor = GpuVendor.nvidia;
+                  } else if (candidate.toLowerCase().contains('amd') || candidate.toLowerCase().contains('radeon')) {
+                    vendor = GpuVendor.amd;
+                  } else if (candidate.toLowerCase().contains('intel')) {
+                    vendor = GpuVendor.intel;
+                  }
+
+                  gpus.add(GpuDeviceInfo(
+                    name: candidate,
+                    vendor: vendor,
+                    vramGB: 4.0,
+                    supportedBackends: vendor.supportedBackends,
+                  ).toMap());
+                }
+              }
+            }
           }
         } catch (_) {}
       }
+
+      // Check CPU info on Windows
+      try {
+        final cpuRes = Process.runSync('powershell', [
+          '-NoProfile',
+          '-Command',
+          '(Get-CimInstance Win32_Processor | Select-Object -First 1).Name'
+        ]);
+        if (cpuRes.exitCode == 0 && cpuRes.stdout.toString().trim().isNotEmpty) {
+          final cpuName = cpuRes.stdout.toString().trim();
+          cpuInfo['name'] = cpuName;
+          final lower = cpuName.toLowerCase();
+          // AVX-512 detection (Intel 11th+ Gen i7/i9, Xeon, AMD Zen 4/5)
+          if (lower.contains('xeon') ||
+              lower.contains('zen 4') ||
+              lower.contains('zen 5') ||
+              RegExp(r'ryzen [79] 7\d{3}').hasMatch(lower) ||
+              RegExp(r'ryzen [79] 8\d{3}').hasMatch(lower) ||
+              RegExp(r'ryzen [79] 9\d{3}').hasMatch(lower) ||
+              RegExp(r'i[79]-1[1234]\d{3}').hasMatch(lower)) {
+            cpuInfo['hasAvx512'] = true;
+          }
+        }
+      } catch (_) {}
+
+      // Select primary GPU (prefer discrete NVIDIA / AMD first)
+      if (gpus.isNotEmpty) {
+        final discrete = gpus.firstWhere(
+          (g) => (g['vendor'] == 'nvidia' || g['vendor'] == 'amd') && (g['isDiscrete'] == true),
+          orElse: () => gpus.first,
+        );
+        gpuName = discrete['name'] as String;
+        gpuVramGB = (discrete['vramGB'] as num).toDouble();
+      }
+
       socFamily = SocFamily.unknown;
     } else if (Platform.isMacOS) {
       deviceType = 'Mac';
       totalRam = 16.0;
       availableRam = 8.0;
       socFamily = SocFamily.apple;
+      var appleGpuName = 'Apple Metal GPU';
       try {
         final res = Process.runSync('sysctl', ['-n', 'machdep.cpu.brand_string']);
-        if (res.exitCode == 0) hardware = res.stdout.toString().trim();
+        if (res.exitCode == 0) {
+          hardware = res.stdout.toString().trim();
+          cpuInfo['name'] = hardware;
+        }
       } catch (_) {}
       try {
         final res = Process.runSync('system_profiler', ['SPDisplaysDataType']);
         final match = RegExp(r'Chipset Model:\s+(.+)').firstMatch(res.stdout.toString());
-        gpuName = match != null ? match.group(1)!.trim() : 'Apple Metal GPU';
-      } catch (_) {
-        gpuName = 'Apple Metal GPU';
-      }
+        if (match != null) appleGpuName = match.group(1)!.trim();
+      } catch (_) {}
+      gpuName = appleGpuName;
       gpuVramGB = totalRam;
+      gpus.add(GpuDeviceInfo(
+        name: appleGpuName,
+        vendor: GpuVendor.apple,
+        vramGB: totalRam,
+        isDiscrete: true,
+        supportedBackends: const [ComputeBackend.metal],
+      ).toMap());
+      cpuInfo['hasNeon'] = true;
     } else if (Platform.isLinux) {
       deviceType = 'Linux PC';
       final meminfo = await File('/proc/meminfo').readAsString();
@@ -247,16 +342,46 @@ Future<Map<String, dynamic>> getDeviceInfo() async {
       if (availMatch != null) {
         availableRam = int.parse(availMatch.group(1)!) / 1024 / 1024;
       }
+
+      try {
+        final cpuinfo = await File('/proc/cpuinfo').readAsString();
+        final modelMatch = RegExp(r'model name\s*:\s*(.+)').firstMatch(cpuinfo);
+        if (modelMatch != null) cpuInfo['name'] = modelMatch.group(1)!.trim();
+        cpuInfo['hasAvx2'] = cpuinfo.contains('avx2');
+        cpuInfo['hasAvx512'] = cpuinfo.contains('avx512f');
+        cpuInfo['hasAmx'] = cpuinfo.contains('amx_tile');
+        cpuInfo['hasNeon'] = cpuinfo.contains('asimd') || cpuinfo.contains('neon');
+      } catch (_) {}
+
       try {
         final res = Process.runSync('lspci', []);
         for (final line in res.stdout.toString().split('\n')) {
-          if (line.toLowerCase().contains('vga compatible controller') ||
-              line.toLowerCase().contains('3d controller')) {
-            gpuName = line.split(':').last.trim();
-            break;
+          final lower = line.toLowerCase();
+          if (lower.contains('vga compatible controller') || lower.contains('3d controller')) {
+            final name = line.split(':').last.trim();
+            var vendor = GpuVendor.other;
+            if (lower.contains('nvidia')) {
+              vendor = GpuVendor.nvidia;
+            } else if (lower.contains('amd') || lower.contains('radeon')) {
+              vendor = GpuVendor.amd;
+            } else if (lower.contains('intel')) {
+              vendor = GpuVendor.intel;
+            }
+            gpus.add(GpuDeviceInfo(
+              name: name,
+              vendor: vendor,
+              vramGB: 8.0,
+              isDiscrete: vendor != GpuVendor.intel,
+              supportedBackends: vendor.supportedBackends,
+            ).toMap());
           }
         }
       } catch (_) {}
+
+      if (gpus.isNotEmpty) {
+        gpuName = gpus.first['name'] as String;
+        gpuVramGB = (gpus.first['vramGB'] as num).toDouble();
+      }
     } else if (Platform.isAndroid) {
       deviceType = 'Android Phone';
       final meminfo = await File('/proc/meminfo').readAsString();
@@ -277,6 +402,20 @@ Future<Map<String, dynamic>> getDeviceInfo() async {
             '';
         socFamily = _detectSocFamily(cpuinfo, hardware);
       } catch (_) {}
+      gpuName = socFamily == SocFamily.snapdragon
+          ? 'Qualcomm Adreno GPU'
+          : socFamily == SocFamily.mediatek
+              ? 'ARM Mali / Immortalis GPU'
+              : 'Mobile GPU';
+      gpuVramGB = totalRam * 0.5;
+      gpus.add(GpuDeviceInfo(
+        name: gpuName,
+        vendor: socFamily == SocFamily.snapdragon ? GpuVendor.qualcomm : GpuVendor.arm,
+        vramGB: gpuVramGB,
+        isDiscrete: false,
+        supportedBackends: const [ComputeBackend.vulkan],
+      ).toMap());
+      cpuInfo['hasNeon'] = true;
     } else if (Platform.isIOS) {
       deviceType = 'iPhone';
       final plugin = LlamaHostApi();
@@ -286,6 +425,14 @@ Future<Map<String, dynamic>> getDeviceInfo() async {
       gpuName = gpuInfo.gpuName;
       gpuVramGB = gpuInfo.deviceLocalMemoryBytes / (1024 * 1024 * 1024);
       socFamily = SocFamily.apple;
+      gpus.add(GpuDeviceInfo(
+        name: gpuName,
+        vendor: GpuVendor.apple,
+        vramGB: gpuVramGB,
+        isDiscrete: true,
+        supportedBackends: const [ComputeBackend.metal],
+      ).toMap());
+      cpuInfo['hasNeon'] = true;
     }
   } catch (e) {
     print('[DeviceInfo] Failed to read device info: $e');
@@ -300,5 +447,7 @@ Future<Map<String, dynamic>> getDeviceInfo() async {
     'gpuName': gpuName,
     'gpuVramGB': gpuVramGB,
     'deviceType': deviceType,
+    'gpus': gpus,
+    'cpuInfo': cpuInfo,
   };
 }

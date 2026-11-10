@@ -8,6 +8,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../core/constants.dart';
 import '../core/haptics.dart';
 import '../core/ui.dart';
+import '../models/hardware_acceleration.dart';
+import '../models/transport_type.dart';
 import '../services/hive_service.dart';
 import '../services/app_log_service.dart';
 import '../services/local_image_service.dart';
@@ -20,6 +22,13 @@ class SettingsController extends GetxController {
   // Observable settings
   final themeMode = ThemeMode.system.obs;
   final inferenceMode = 'local'.obs; // 'local' or 'cloud'
+  final computeBackend = ComputeBackend.auto.obs;
+  final gpuLayers = (-1).obs; // -1: auto, 0: CPU, 1..99: custom
+  final flashAttention = true.obs;
+  final inferenceThreads = 0.obs; // 0: auto
+  final batchSize = 512.obs;
+  final clusterSchedulerStrategy = ClusterSchedulerStrategy.topologyLatency.obs;
+  final adbAutoBridge = true.obs;
   final cloudProvider = 'openrouter'.obs;
   final openaiKey = ''.obs;
   final anthropicKey = ''.obs;
@@ -240,6 +249,17 @@ class SettingsController extends GetxController {
         true;
     Haptics.enabled = hapticsEnabled.value;
 
+    // Load Hardware Acceleration Settings
+    final savedBackend = _hive.getSetting<String>(AppConstants.keyComputeBackend);
+    computeBackend.value = ComputeBackendExt.fromString(savedBackend);
+    gpuLayers.value = _hive.getSetting<int>(AppConstants.keyGpuLayers, defaultValue: -1) ?? -1;
+    flashAttention.value = _hive.getSetting<bool>(AppConstants.keyFlashAttention, defaultValue: true) ?? true;
+    inferenceThreads.value = _hive.getSetting<int>(AppConstants.keyInferenceThreads, defaultValue: 0) ?? 0;
+    batchSize.value = _hive.getSetting<int>(AppConstants.keyBatchSize, defaultValue: 512) ?? 512;
+    final savedStrat = _hive.getSetting<String>(AppConstants.keyClusterSchedulerStrategy);
+    clusterSchedulerStrategy.value = ClusterSchedulerStrategyExt.fromString(savedStrat);
+    adbAutoBridge.value = _hive.getSetting<bool>(AppConstants.keyAdbAutoBridge, defaultValue: true) ?? true;
+
     // Sync controllers with loaded values
     openaiKeyController.text = openaiKey.value;
     anthropicKeyController.text = anthropicKey.value;
@@ -338,6 +358,41 @@ class SettingsController extends GetxController {
       default:
         return openaiModel.value;
     }
+  }
+
+  Future<void> setComputeBackend(ComputeBackend backend) async {
+    computeBackend.value = backend;
+    await _hive.setSetting(AppConstants.keyComputeBackend, backend.id);
+  }
+
+  Future<void> setGpuLayers(int layers) async {
+    gpuLayers.value = layers;
+    await _hive.setSetting(AppConstants.keyGpuLayers, layers);
+  }
+
+  Future<void> setFlashAttention(bool value) async {
+    flashAttention.value = value;
+    await _hive.setSetting(AppConstants.keyFlashAttention, value);
+  }
+
+  Future<void> setInferenceThreads(int threads) async {
+    inferenceThreads.value = threads;
+    await _hive.setSetting(AppConstants.keyInferenceThreads, threads);
+  }
+
+  Future<void> setBatchSize(int size) async {
+    batchSize.value = size;
+    await _hive.setSetting(AppConstants.keyBatchSize, size);
+  }
+
+  Future<void> setClusterSchedulerStrategy(ClusterSchedulerStrategy strategy) async {
+    clusterSchedulerStrategy.value = strategy;
+    await _hive.setSetting(AppConstants.keyClusterSchedulerStrategy, strategy.id);
+  }
+
+  Future<void> setAdbAutoBridge(bool value) async {
+    adbAutoBridge.value = value;
+    await _hive.setSetting(AppConstants.keyAdbAutoBridge, value);
   }
 
   Future<void> setInferenceMode(String mode) async {

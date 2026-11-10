@@ -1,8 +1,11 @@
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../controllers/settings_controller.dart';
 import '../core/constants.dart';
 import '../core/ui.dart';
+import '../models/hardware_acceleration.dart';
+import '../widgets/option_info_sheet.dart';
 import '../widgets/home_empty_state.dart' show providerLabel;
 import '../services/inference_service.dart';
 import '../services/hive_service.dart';
@@ -92,6 +95,13 @@ class SettingsView extends GetView<SettingsController> {
             ]),
             const SectionHeader('Performance'),
             AppGroup(dividerIndent: 60, children: [
+              _navRow(
+                context,
+                icon: Icons.developer_board_rounded,
+                title: 'Hardware acceleration',
+                value: controller.computeBackend.value.displayName,
+                builder: (ctx) => _buildHardwareAccelerationGroup(ctx),
+              ),
               _navRow(
                 context,
                 icon: Icons.speed_rounded,
@@ -414,6 +424,7 @@ class SettingsView extends GetView<SettingsController> {
     required ValueChanged<double> onChanged,
     Color? color,
     String? caption,
+    VoidCallback? onInfoTap,
     List<Widget> below = const [],
   }) {
     final t = AppTokens.of(context);
@@ -424,7 +435,18 @@ class SettingsView extends GetView<SettingsController> {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(children: [
-            Expanded(child: Text(label, style: t.body)),
+            Expanded(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(child: Text(label, style: t.body)),
+                  if (onInfoTap != null) ...[
+                    const SizedBox(width: 4),
+                    OptionInfoIcon(onTap: onInfoTap),
+                  ],
+                ],
+              ),
+            ),
             const SizedBox(width: 12),
             Text(valueLabel,
                 style: t.body.copyWith(
@@ -609,6 +631,180 @@ class SettingsView extends GetView<SettingsController> {
     });
   }
 
+  Widget _buildHardwareAccelerationGroup(BuildContext context) {
+    final t = AppTokens.of(context);
+    final device = Get.find<DeviceInfoService>();
+    final currentBackend = controller.computeBackend.value;
+    final recommended = device.recommendedBackend;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Expanded(child: SectionHeader('Compute Acceleration Backend')),
+            OptionInfoIcon(
+              onTap: () => showOptionHelpSheet(
+                context,
+                title: 'Hardware Acceleration Compute Backends',
+                quickSummary:
+                    'Selects which hardware acceleration engine is used to execute neural network math. Auto automatically detects your GPU and picks the fastest zero-copy engine.',
+                recommended:
+                    'Auto (Detected: ${recommended.displayName}).',
+                powerUserDeepDive:
+                    'Different backends compile specialized GPU/CPU kernels:\n'
+                    '• CUDA: Uses NVIDIA Tensor Cores with FP16/BF16/FP8 matrix execution.\n'
+                    '• ROCm / HIP: Uses AMD Matrix Cores on RDNA2/3 and CDNA architectures.\n'
+                    '• Vulkan 1.3: Universal cross-platform GPU shaders across AMD, Intel Arc, Adreno, Mali.\n'
+                    '• DirectML: DirectX 12 hardware acceleration for all Windows 10/11 GPUs.\n'
+                    '• Apple Metal: Zero-copy unified memory architecture on M-series chips.\n'
+                    '• CPU AVX-512 / AMX: 512-bit vector registers and Intel Advanced Matrix Extensions.',
+                mathCalculation: 'Theoretical Peak TFLOPS = 2 × Cores × Frequency × Vectors_per_cycle',
+                cliFlag: '--gpu-backend <backend>',
+                configFile: 'HiveBox(\'settings\') -> keyComputeBackend',
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
+        ),
+        AppGroup(dividerIndent: 60, children: [
+          for (final backend in ComputeBackend.values)
+            AppRow(
+              icon: backend.icon,
+              title: backend.displayName,
+              subtitle: backend == ComputeBackend.auto
+                  ? 'Auto-selects: ${recommended.displayName}'
+                  : backend.description,
+              selected: currentBackend == backend,
+              trailing: currentBackend == backend
+                  ? Icon(Icons.check_circle_rounded, color: t.accent, size: 20)
+                  : (backend == recommended && currentBackend != backend
+                      ? Text('Recommended', style: t.caption.copyWith(color: t.accent, fontSize: 12))
+                      : null),
+              onTap: () => controller.setComputeBackend(backend),
+            ),
+        ]),
+        const SectionHeader('Detected Video Cards & GPUs'),
+        AppGroup(dividerIndent: 60, children: [
+          if (device.gpus.isEmpty)
+            const AppRow(
+              icon: Icons.videogame_asset_off_outlined,
+              title: 'No discrete GPU detected',
+              subtitle: 'CPU SIMD vector execution active',
+            )
+          else
+            for (final gpu in device.gpus)
+              AppRow(
+                icon: Icons.developer_board_rounded,
+                title: gpu.name,
+                subtitle: '${gpu.vendor.displayName} · ${gpu.vramGB.toStringAsFixed(1)} GB VRAM'
+                    '${gpu.driverVersion.isNotEmpty ? " · Driver ${gpu.driverVersion}" : ""}',
+                trailing: Text(
+                  gpu.isDiscrete ? 'Discrete' : 'Integrated',
+                  style: t.caption.copyWith(fontSize: 12),
+                ),
+              ),
+        ]),
+        if (device.cpuInfo.value != null) ...[
+          const SectionHeader('CPU Vector Acceleration'),
+          AppGroup(dividerIndent: 60, children: [
+            AppRow(
+              icon: Icons.memory_rounded,
+              title: device.cpuInfo.value!.name,
+              subtitle: '${device.cpuInfo.value!.threads} Threads · SIMD: ${device.cpuInfo.value!.simdSummary}',
+            ),
+          ]),
+        ],
+        const SectionHeader('Execution Parameters'),
+        AppGroup(children: [
+          _sliderRow(
+            context,
+            label: 'GPU offload layers',
+            valueLabel: controller.gpuLayers.value < 0 ? 'Auto (Max)' : '${controller.gpuLayers.value} layers',
+            value: controller.gpuLayers.value < 0 ? 99 : controller.gpuLayers.value.toDouble(),
+            min: 0,
+            max: 99,
+            divisions: 99,
+            onChanged: (v) => controller.setGpuLayers(v.toInt()),
+            caption: 'Auto (99) offloads all layers to GPU VRAM. Lower values offload partially.',
+            onInfoTap: () => showOptionHelpSheet(
+              context,
+              title: 'GPU Offload Layers (--n-gpu-layers)',
+              quickSummary:
+                  'Controls how many transformer layers are calculated inside GPU VRAM versus system RAM. 99 layers puts the entire model on GPU for maximum speed.',
+              recommended:
+                  'Set to 99 if the model fits in your GPU VRAM. Reduce if you get out-of-memory errors.',
+              powerUserDeepDive:
+                  'Transformer blocks are offloaded to GPU compute buffers. If VRAM capacity is exceeded, Windows driver memory manager initiates shared system-memory paging across PCIe bus (cutting bandwidth from ~500 GB/s to ~30 GB/s). Offloading a subset of layers keeps memory within dedicated VRAM bounds.',
+              mathCalculation: 'VRAM = Model_Size × (N_offload / N_total) + KV_Cache_Allocation',
+              cliFlag: '--n-gpu-layers <N> / -ngl <N>',
+              configFile: 'HiveBox(\'settings\') -> keyGpuLayers',
+            ),
+          ),
+          AppRow(
+            icon: Icons.flash_on_rounded,
+            title: 'Flash Attention',
+            subtitle: 'Reduces VRAM usage and speeds up attention kernels on CUDA, Metal & Vulkan',
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                OptionInfoIcon(
+                  onTap: () => showOptionHelpSheet(
+                    context,
+                    title: 'Flash Attention Kernel',
+                    quickSummary:
+                        'An advanced GPU attention algorithm that dramatically cuts VRAM usage and speeds up responses, especially for long conversations.',
+                    recommended: 'Keep enabled on CUDA, Metal, and Vulkan GPUs.',
+                    powerUserDeepDive:
+                        'Flash Attention computes exact attention without materializing the full N×N attention matrix in high-bandwidth memory (HBM). It tiles the query, key, and value matrices in GPU SRAM and performs online softmax reduction, reducing memory I/O complexity from O(N²) to O(N).',
+                    mathCalculation: 'Memory IO: O(N² d² / M) vs O(N d + N²)',
+                    cliFlag: '--flash-attn / -fa',
+                    configFile: 'HiveBox(\'settings\') -> keyFlashAttention',
+                  ),
+                ),
+                Switch(
+                  value: controller.flashAttention.value,
+                  onChanged: controller.setFlashAttention,
+                ),
+              ],
+            ),
+            onTap: () => controller.setFlashAttention(!controller.flashAttention.value),
+          ),
+          _sliderRow(
+            context,
+            label: 'CPU threads',
+            valueLabel: controller.inferenceThreads.value <= 0
+                ? 'Auto (${Platform.numberOfProcessors > 2 ? Platform.numberOfProcessors - 1 : 2})'
+                : '${controller.inferenceThreads.value} threads',
+            value: (controller.inferenceThreads.value <= 0
+                    ? (Platform.numberOfProcessors > 2 ? Platform.numberOfProcessors - 1 : 2)
+                    : controller.inferenceThreads.value)
+                .toDouble()
+                .clamp(1.0, Platform.numberOfProcessors.toDouble()),
+            min: 1,
+            max: Platform.numberOfProcessors.toDouble(),
+            divisions: Platform.numberOfProcessors > 1 ? Platform.numberOfProcessors - 1 : 1,
+            onChanged: (v) => controller.setInferenceThreads(v.toInt()),
+            onInfoTap: () => showOptionHelpSheet(
+              context,
+              title: 'CPU Inference Threads',
+              quickSummary:
+                  'Number of CPU cores dedicated to computing matrix math. Auto matches your computer\'s physical performance cores.',
+              recommended:
+                  'Auto (${Platform.numberOfProcessors > 2 ? Platform.numberOfProcessors - 1 : 2} threads).',
+              powerUserDeepDive:
+                  'Sets the worker count for OpenMP / ggml_threadpool. Setting threads equal to physical core count optimizes SIMD execution pipelines (AVX2, AVX-512, AMX, NEON). Hyperthreaded logical threads share vector execution units and can degrade matrix multiplication throughput due to cache contention.',
+              mathCalculation: 'Optimal Threads = N_physical_cores',
+              cliFlag: '--threads <N> / -t <N>',
+              configFile: 'HiveBox(\'settings\') -> keyInferenceThreads',
+            ),
+          ),
+        ]),
+      ],
+    );
+  }
+
   Widget _buildLiteRtGroup(BuildContext context) {
     final modes = [
       (
@@ -663,6 +859,19 @@ class SettingsView extends GetView<SettingsController> {
         safeMax: 1.0,
         onChanged: (v) => controller.setTemperature(v),
         warning: 'High temperature = unpredictable output!',
+        onInfoTap: () => showOptionHelpSheet(
+          context,
+          title: 'Temperature (Creativity vs Determinism)',
+          quickSummary:
+              'Controls how creative or focused the AI\'s responses are. Lower values (0.1–0.3) make the AI stick strictly to facts and logic. Higher values (0.7–1.0) make it more creative and diverse in phrasing.',
+          recommended:
+              '0.1 to 0.3 for coding, reasoning, and factual Q&A; 0.7 for creative writing and storytelling.',
+          powerUserDeepDive:
+              'Temperature scales the logit vector z before the softmax activation: P(x_i) = exp(z_i / T) / sum_j exp(z_j / T). As T approaches 0, sampling converges to greedy argmax selection. Higher temperatures flatten the distribution, increasing entropy and permitting lower-probability tokens to be selected.',
+          mathCalculation: 'P(w_i) = softmax(z_i / T)',
+          cliFlag: '--temp 0.7',
+          configFile: 'HiveBox(\'settings\') -> keyTemperature',
+        ),
       ),
       _modelParameterSlider(
         context,
@@ -675,6 +884,19 @@ class SettingsView extends GetView<SettingsController> {
         onChanged: (v) => controller.setMaxTokens(v.toInt()),
         displayValue: controller.maxTokens.value.toString(),
         warning: 'Your phone may crash with this value!',
+        onInfoTap: () => showOptionHelpSheet(
+          context,
+          title: 'Max Output Tokens (Generation Limit)',
+          quickSummary:
+              'Sets the maximum length for a single response generated by the model. 512 tokens is roughly 350–400 English words. If answers get cut off mid-sentence, increase this value.',
+          recommended:
+              '512–1024 for mobile phones; 2048–4096 for desktop PC / Mac workstations.',
+          powerUserDeepDive:
+              'Sets the generation step limit (n_predict). Generation stops earlier if the model emits an EOS token or matching stop sequence. Higher token caps increase peak working memory and generation runtime.',
+          mathCalculation: '1 Token ≈ 0.75 English Words ≈ 4 Characters',
+          cliFlag: '--n-predict 512 / -n 512',
+          configFile: 'HiveBox(\'settings\') -> keyMaxTokens',
+        ),
       ),
       (() {
         final inference = Get.find<InferenceService>();
@@ -709,6 +931,20 @@ class SettingsView extends GetView<SettingsController> {
           warning: isLiteRtActive
               ? 'Context capped at 4096 to prevent driver memory crash for LiteRT models.'
               : 'Context this large will eat all your RAM!',
+          onInfoTap: () => showOptionHelpSheet(
+            context,
+            title: 'Context Size (KV Cache Sequence Length)',
+            quickSummary:
+                'The total memory window the model remembers in a conversation, including system prompt, chat history, and new reply. Larger context lets you paste long documents, but uses more RAM/VRAM.',
+            recommended:
+                '2048–4096 for mobile devices; 8192–16384 for desktop PC / Mac with 16GB+ RAM.',
+            powerUserDeepDive:
+                'Specifies the sequence length (n_ctx) for self-attention. Key and Value vectors for all transformer layers are pre-allocated in the KV cache in VRAM or RAM. Memory scales linearly with context length: O(N).',
+            mathCalculation:
+                'KV Cache Bytes = 2 × n_layers × n_kv_heads × d_head × n_ctx × sizeof(fp16)',
+            cliFlag: '--ctx-size 2048 / -c 2048',
+            configFile: 'HiveBox(\'settings\') -> keyContextSize',
+          ),
         );
       })(),
     ]);
@@ -725,6 +961,7 @@ class SettingsView extends GetView<SettingsController> {
     required ValueChanged<double> onChanged,
     required String warning,
     String? displayValue,
+    VoidCallback? onInfoTap,
   }) {
     final t = AppTokens.of(context);
     final isOver = value > safeMax;
@@ -742,6 +979,7 @@ class SettingsView extends GetView<SettingsController> {
       max: max,
       divisions: divisions,
       color: warnColor,
+      onInfoTap: onInfoTap,
       caption: safeMax < max
           ? 'Recommended max: ${safeMax.toInt() > 0 ? safeMax.toInt().toString() : safeMax.toStringAsFixed(1)}'
           : null,

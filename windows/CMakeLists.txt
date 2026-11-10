@@ -105,3 +105,14 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# Bundle built-in llama.cpp inference engine and RPC worker if present in bin/
+set(BIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../bin")
+if(EXISTS "${BIN_DIR}")
+  file(GLOB BUNDLED_ENGINE_FILES "${BIN_DIR}/*.*")
+  if(BUNDLED_ENGINE_FILES)
+    install(FILES ${BUNDLED_ENGINE_FILES}
+      DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+      COMPONENT Runtime)
+  endif()
+endif()

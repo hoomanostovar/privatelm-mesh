@@ -9,10 +9,17 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../core/ui.dart';
+import '../models/hardware_acceleration.dart';
+import '../models/transport_type.dart';
+import '../services/adb_bridge_service.dart';
 import '../services/cluster_service.dart';
+import '../services/device_info_service.dart';
+import '../services/mesh_discovery_service.dart';
+import '../widgets/option_info_sheet.dart';
 
-/// Phone cluster: pick Master (runs the model) or Worker (lends this phone),
-/// and pair them by scanning the worker's QR code.
+/// Heterogeneous Device Cluster & Mesh Management Screen.
+/// Allows live auditing of online mesh nodes, pooled cluster memory,
+/// USB-C ADB auto-bridging, and topology-aware layer placement.
 class ClusterView extends StatefulWidget {
   const ClusterView({super.key});
 
@@ -22,6 +29,12 @@ class ClusterView extends StatefulWidget {
 
 class _ClusterViewState extends State<ClusterView> {
   final ClusterService cluster = Get.find<ClusterService>();
+  final MeshDiscoveryService mesh = Get.find<MeshDiscoveryService>();
+  final AdbBridgeService? adb =
+      Get.isRegistered<AdbBridgeService>() ? Get.find<AdbBridgeService>() : null;
+  final DeviceInfoService? dev =
+      Get.isRegistered<DeviceInfoService>() ? Get.find<DeviceInfoService>() : null;
+
   Timer? _wifiTimer;
 
   @override
@@ -30,7 +43,6 @@ class _ClusterViewState extends State<ClusterView> {
     cluster.refreshWorkerStatus();
     cluster.refreshWifiAddress();
     if (cluster.role == ClusterRole.master) cluster.relocateWorkers();
-    // Pick up Wi-Fi being turned on while this screen is open.
     _wifiTimer = Timer.periodic(
         const Duration(seconds: 3), (_) => cluster.refreshWifiAddress());
   }
@@ -39,6 +51,390 @@ class _ClusterViewState extends State<ClusterView> {
   void dispose() {
     _wifiTimer?.cancel();
     super.dispose();
+  }
+
+  IconData _localDeviceIcon() {
+    if (kIsWeb) return Icons.language_rounded;
+    if (Platform.isWindows || Platform.isLinux) return Icons.desktop_windows_rounded;
+    if (Platform.isMacOS) return Icons.laptop_mac_rounded;
+    if (Platform.isAndroid || Platform.isIOS) return Icons.smartphone_rounded;
+    return Icons.devices_rounded;
+  }
+
+  static IconData _nodeIcon(ClusterWorker w) {
+    final s = '${w.name} ${w.model ?? ''}'.toLowerCase();
+    if (s.contains('pc') ||
+        s.contains('desktop') ||
+        s.contains('windows') ||
+        s.contains('win')) {
+      return Icons.desktop_windows_rounded;
+    }
+    if (s.contains('mac') ||
+        s.contains('macbook') ||
+        s.contains('apple')) {
+      return Icons.laptop_mac_rounded;
+    }
+    if (s.contains('tablet') || s.contains('pad')) {
+      return Icons.tablet_android_rounded;
+    }
+    if (s.contains('linux') ||
+        s.contains('ubuntu') ||
+        s.contains('server')) {
+      return Icons.terminal_rounded;
+    }
+    return Icons.smartphone_rounded;
+  }
+
+  Widget _transportBadge(BuildContext context, String? type, [double? latency]) {
+    final t = AppTokens.of(context);
+    final transport = TransportTypeExt.fromString(type);
+    final Color color;
+    final String label;
+
+    switch (transport) {
+      case TransportType.usb:
+        color = t.green;
+        label = '⚡ USB${latency != null ? " · ${latency.toStringAsFixed(1)}ms" : ""}';
+        break;
+      case TransportType.ethernet:
+        color = t.accent;
+        label = '🌐 Ethernet${latency != null ? " · ${latency.toStringAsFixed(1)}ms" : ""}';
+        break;
+      case TransportType.wifi:
+      case TransportType.unknown:
+        color = t.muted;
+        label = '📶 Wi-Fi${latency != null ? " · ${latency.toStringAsFixed(1)}ms" : ""}';
+        break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: color),
+      ),
+    );
+  }
+
+  Widget _nodeTile(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    String? transport,
+    Widget? badge,
+    Widget? trailing,
+  }) {
+    final t = AppTokens.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: t.surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: t.hairline),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: t.fill,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, size: 20, color: t.text),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        title,
+                        style: t.bodyStrong.copyWith(fontSize: 13),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (transport != null) ...[
+                      const SizedBox(width: 6),
+                      _transportBadge(context, transport),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(subtitle, style: t.caption.copyWith(fontSize: 11)),
+              ],
+            ),
+          ),
+          if (badge != null) badge,
+          if (trailing != null) trailing,
+        ],
+      ),
+    );
+  }
+
+  Widget _peerNodeTile(BuildContext context, MeshNode peer) {
+    final t = AppTokens.of(context);
+    final isPaired = cluster.workers.any((w) => w.endpoint == peer.endpoint);
+
+    return _nodeTile(
+      context,
+      icon: peer.icon,
+      title: peer.name,
+      subtitle: [
+        peer.endpoint,
+        if (peer.gpuVramGB > 0) '${peer.gpuVramGB.toStringAsFixed(1)} GB VRAM',
+        '${peer.freeRamGB.toStringAsFixed(1)} GB free',
+        peer.hardwareBackend,
+      ].join(' · '),
+      transport: peer.transportType,
+      trailing: isPaired
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.check_circle_rounded, size: 16, color: t.green),
+                const SizedBox(width: 4),
+                Text('Paired', style: t.caption.copyWith(color: t.green, fontWeight: FontWeight.w600)),
+              ],
+            )
+          : (cluster.role == ClusterRole.master
+              ? PillButton(
+                  label: 'Pair',
+                  primary: true,
+                  onPressed: () => _report(cluster.addMeshNode(peer)),
+                )
+              : null),
+    );
+  }
+
+  Widget _meshInventoryCard(BuildContext context) {
+    final t = AppTokens.of(context);
+    final peers = mesh.peerNodes;
+    final totalNodes = peers.length + 1;
+    final totalVram = mesh.totalMeshVramGB;
+    final totalFreeRam = mesh.totalMeshFreeRamGB;
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.hub_rounded, size: 20, color: t.accent),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Mesh Device Inventory & Audit', style: t.bodyStrong),
+              ),
+              OptionInfoIcon(
+                onTap: () => showOptionHelpByKey(context, 'cluster_mesh_audit'),
+              ),
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: t.accent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    StatusDot(t.green, size: 7),
+                    const SizedBox(width: 6),
+                    Text(
+                      '$totalNodes Online',
+                      style: t.caption.copyWith(
+                        color: t.accent,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // Capability Banner
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: t.surface,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: t.outline.withValues(alpha: 0.5)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  mesh.meshModelRecommendation,
+                  style: t.bodyStrong.copyWith(fontSize: 13),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Pooled Capacity: ${totalVram > 0 ? "${totalVram.toStringAsFixed(1)} GB VRAM + " : ""}${totalFreeRam.toStringAsFixed(1)} GB RAM free',
+                  style: t.caption.copyWith(color: t.muted),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text('Active Mesh Nodes', style: t.label),
+          const SizedBox(height: 8),
+          // Local Node
+          _nodeTile(
+            context,
+            icon: _localDeviceIcon(),
+            title: '${cluster.deviceName.isEmpty ? "This Device" : cluster.deviceName} (Local)',
+            subtitle: [
+              dev?.recommendedBackend.displayName ?? 'Auto',
+              if ((dev?.gpuVramGB.value ?? 0) > 0)
+                '${dev!.gpuVramGB.value.toStringAsFixed(1)} GB VRAM',
+              '${(dev?.availableRamGB.value ?? 4.0).toStringAsFixed(1)} GB free',
+            ].join(' · '),
+            badge: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: t.fill,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                cluster.role == ClusterRole.master ? 'Master' : 'Node',
+                style: t.small.copyWith(fontSize: 10, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+          // Peer Nodes
+          for (final peer in peers) ...[
+            const SizedBox(height: 6),
+            _peerNodeTile(context, peer),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _usbBridgeCard(BuildContext context) {
+    final t = AppTokens.of(context);
+    final adbService = adb;
+    final usbDevices = adbService?.usbDevices ?? <AdbUsbDevice>[];
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.usb_rounded, size: 20, color: t.green),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('USB-C Direct Cable (ADB Auto-Bridge)', style: t.bodyStrong),
+              ),
+              OptionInfoIcon(
+                onTap: () => showOptionHelpByKey(context, 'transport_usb_bridge'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Connect Android phones via USB-C cables directly to this PC. Bypasses Wi-Fi for sub-millisecond (<0.3 ms) latency and up to 10 Gbps throughput.',
+            style: t.caption,
+          ),
+          const SizedBox(height: 12),
+          if (usbDevices.isNotEmpty) ...[
+            Text('Detected USB Phones (${usbDevices.length})', style: t.label),
+            const SizedBox(height: 6),
+            for (final d in usbDevices)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    Icon(Icons.smartphone_rounded, size: 16, color: t.green),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text('${d.model} (${d.serial})', style: t.caption),
+                    ),
+                    _transportBadge(context, 'usb', 0.3),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 8),
+          ],
+          PillButton(
+            label: 'Bridge USB-C Phones',
+            icon: Icons.cable_rounded,
+            primary: true,
+            onPressed: () async {
+              final count = await cluster.autoBridgeUsbDevices();
+              showToast(
+                'USB-C Phones Bridged',
+                count > 0
+                    ? 'Successfully bridged $count phone(s) over low-latency USB-C.'
+                    : 'No new USB phones detected. Ensure USB Debugging is ON.',
+                tone: count > 0 ? ToastTone.success : ToastTone.info,
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _schedulerCard(BuildContext context) {
+    final t = AppTokens.of(context);
+    final strategy = cluster.schedulerStrategy.value;
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.alt_route_rounded, size: 20, color: t.accent),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Cluster Scheduling Strategy', style: t.bodyStrong),
+              ),
+              OptionInfoIcon(
+                onTap: () => showOptionHelpByKey(context, 'cluster_scheduler'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Optimizes model weight partitioning across your hardware topology.',
+            style: t.caption,
+          ),
+          const SizedBox(height: 12),
+          AppSegmented<ClusterSchedulerStrategy>(
+            items: const [
+              (ClusterSchedulerStrategy.topologyLatency, 'Latency & Topology'),
+              (ClusterSchedulerStrategy.throughputWeighted, 'Throughput'),
+              (ClusterSchedulerStrategy.capacityBalanced, 'Balanced'),
+            ],
+            selected: strategy,
+            onChanged: cluster.setSchedulerStrategy,
+          ),
+          const SizedBox(height: 10),
+          Text(
+            strategy == ClusterSchedulerStrategy.topologyLatency
+                ? '⭐ Recommended: Prioritizes Local GPU -> USB-C (<0.5ms) -> Ethernet (<1ms). Gates Wi-Fi nodes when the model fits within wired memory.'
+                : strategy == ClusterSchedulerStrategy.throughputWeighted
+                    ? 'Splits layers proportionally to measured bus and network transfer speeds (GB/s).'
+                    : 'Evenly distributes layers across total free VRAM and RAM.',
+            style: t.small.copyWith(color: t.muted),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -53,6 +449,16 @@ class _ClusterViewState extends State<ClusterView> {
           padding: kPagePadding,
           children: [
             const SizedBox(height: 8),
+            Row(
+              children: [
+                Text('Cluster Role', style: t.bodyStrong),
+                const SizedBox(width: 6),
+                OptionInfoIcon(
+                  onTap: () => showOptionHelpByKey(context, 'cluster_role'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
             AppSegmented<ClusterRole>(
               items: [
                 (ClusterRole.off, 'Off'),
@@ -65,12 +471,14 @@ class _ClusterViewState extends State<ClusterView> {
             const SizedBox(height: 16),
             if (role != ClusterRole.off && cluster.wifiAddress.value == null) ...[
               AppNotice(
-                'Turn on Wi-Fi. All phones in the cluster must be on the same Wi-Fi network.',
+                'Turn on Wi-Fi or connect via Ethernet/USB. Devices must share a network route.',
                 icon: Icons.wifi_off_rounded,
                 color: t.orange,
               ),
               const SizedBox(height: 16),
             ],
+            _meshInventoryCard(context),
+            const SizedBox(height: 16),
             ...switch (role) {
               ClusterRole.off => _offSection(),
               ClusterRole.master => _masterSection(context),
@@ -194,33 +602,18 @@ class _ClusterViewState extends State<ClusterView> {
 
   // ── Master ─────────────────────────────────────────────────────────────
 
-  static IconData _nodeIcon(ClusterWorker w) {
-    final s = '${w.name} ${w.model ?? ''}'.toLowerCase();
-    if (s.contains('pc') ||
-        s.contains('desktop') ||
-        s.contains('windows') ||
-        s.contains('win')) {
-      return Icons.desktop_windows_rounded;
-    }
-    if (s.contains('mac') ||
-        s.contains('macbook') ||
-        s.contains('apple')) {
-      return Icons.laptop_mac_rounded;
-    }
-    if (s.contains('linux') ||
-        s.contains('ubuntu') ||
-        s.contains('server')) {
-      return Icons.terminal_rounded;
-    }
-    return Icons.smartphone_rounded;
-  }
-
   List<Widget> _masterSection(BuildContext context) {
     final t = AppTokens.of(context);
     final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
     return [
       if (cluster.split.length > 1) ...[
         _SplitCard(shares: cluster.split),
+        const SizedBox(height: 16),
+      ],
+      _schedulerCard(context),
+      const SizedBox(height: 16),
+      if (!isMobile) ...[
+        _usbBridgeCard(context),
         const SizedBox(height: 16),
       ],
       if (isMobile)
@@ -237,14 +630,25 @@ class _ClusterViewState extends State<ClusterView> {
           icon: Icons.wifi_find_rounded,
           onPressed: cluster.isScanning.value ? null : cluster.scanNearby,
         ),
-      SectionHeader('Workers (${cluster.workers.length})'),
+      const SizedBox(height: 16),
+      Row(
+        children: [
+          Expanded(
+            child: SectionHeader('Workers (${cluster.workers.length})'),
+          ),
+          OptionInfoIcon(
+            onTap: () => showOptionHelpByKey(context, 'cluster_workers'),
+          ),
+        ],
+      ),
       if (cluster.workers.isEmpty)
         const AppGroup(children: [
           EmptyState(
             icon: Icons.devices_other_rounded,
             title: 'No workers yet',
-            message: 'On each other phone or computer, open Device Cluster, '
-                'choose Worker, or run privatelm-mesh-daemon.',
+            message: 'Pair an active node from the Mesh Device Inventory above, '
+                'open Device Cluster on another phone and choose Worker, '
+                'or connect a phone via USB-C.',
           ),
         ])
       else
@@ -257,11 +661,19 @@ class _ClusterViewState extends State<ClusterView> {
                 w.endpoint,
                 if (w.ramMb != null) '${_gb(w.ramMb!)} free',
                 if (w.bandwidth != null) '${w.bandwidth!.toStringAsFixed(1)} GB/s',
+                if (w.latencyMs != null) '${w.latencyMs!.toStringAsFixed(1)} ms',
               ].join(' · '),
-              trailing: IconButton(
-                icon: Icon(Icons.close_rounded, color: t.muted),
-                tooltip: 'Remove',
-                onPressed: () => cluster.remove(w),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _transportBadge(context, w.transportType, w.latencyMs),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    icon: Icon(Icons.close_rounded, color: t.muted),
+                    tooltip: 'Remove',
+                    onPressed: () => cluster.remove(w),
+                  ),
+                ],
               ),
             ),
         ]),
@@ -369,7 +781,7 @@ class _SplitCard extends StatelessWidget {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('Loaded model', style: t.bodyStrong),
         const SizedBox(height: 2),
-        Text('Running on ${shares.length} phones · ${_gb(total)}', style: t.caption),
+        Text('Running on ${shares.length} devices · ${_gb(total)}', style: t.caption),
         const SizedBox(height: 14),
         ClipRRect(
           borderRadius: BorderRadius.circular(6),
@@ -396,7 +808,7 @@ class _SplitCard extends StatelessWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  shares[i].isThisPhone ? '${shares[i].name} (this phone)' : shares[i].name,
+                  shares[i].isThisPhone ? '${shares[i].name} (this device)' : shares[i].name,
                   style: t.body,
                 ),
               ),

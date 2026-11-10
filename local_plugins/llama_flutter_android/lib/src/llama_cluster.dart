@@ -19,6 +19,18 @@ class ClusterWorker {
   /// The worker device's lasting ID: finds it again when its IP changes.
   final String? id;
 
+  /// Network transport link type ('usb', 'ethernet', 'wifi', 'unknown').
+  final String transportType;
+
+  /// Measured TCP round-trip latency in milliseconds.
+  final double? latencyMs;
+
+  /// Hardware platform category ('PC', 'Mac', 'Linux', 'Android', 'iOS').
+  final String? deviceType;
+
+  /// Hardware acceleration backend used by the worker ('CUDA', 'Metal', 'ROCm', 'Vulkan', 'CPU').
+  final String? hardwareBackend;
+
   const ClusterWorker({
     required this.name,
     required this.host,
@@ -27,6 +39,10 @@ class ClusterWorker {
     this.bandwidth,
     this.model,
     this.id,
+    this.transportType = 'unknown',
+    this.latencyMs,
+    this.deviceType,
+    this.hardwareBackend,
   });
 
   String get endpoint => '$host:$port';
@@ -39,11 +55,34 @@ class ClusterWorker {
         bandwidth: (map['bandwidth'] as num?)?.toDouble(),
         model: map['model'] as String?,
         id: map['id'] as String?,
+        transportType: map['transportType'] as String? ?? 'unknown',
+        latencyMs: (map['latencyMs'] as num?)?.toDouble(),
+        deviceType: map['deviceType'] as String?,
+        hardwareBackend: map['hardwareBackend'] as String?,
       );
 
-  /// The same device at a new address.
-  ClusterWorker movedTo(String host, int port) => ClusterWorker(
-      name: name, host: host, port: port, ramMb: ramMb, bandwidth: bandwidth, model: model, id: id);
+  /// The same device at a new address or updated link properties.
+  ClusterWorker movedTo(
+    String host,
+    int port, {
+    String? transportType,
+    double? latencyMs,
+    String? deviceType,
+    String? hardwareBackend,
+  }) =>
+      ClusterWorker(
+        name: name,
+        host: host,
+        port: port,
+        ramMb: ramMb,
+        bandwidth: bandwidth,
+        model: model,
+        id: id,
+        transportType: transportType ?? this.transportType,
+        latencyMs: latencyMs ?? this.latencyMs,
+        deviceType: deviceType ?? this.deviceType,
+        hardwareBackend: hardwareBackend ?? this.hardwareBackend,
+      );
 
   Map<String, dynamic> toMap() => {
         'name': name,
@@ -53,6 +92,10 @@ class ClusterWorker {
         'bandwidth': bandwidth,
         'model': model,
         'id': id,
+        'transportType': transportType,
+        'latencyMs': latencyMs,
+        'deviceType': deviceType,
+        'hardwareBackend': hardwareBackend,
       };
 }
 

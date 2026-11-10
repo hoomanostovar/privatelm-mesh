@@ -5,7 +5,7 @@ import '../controllers/home_controller.dart';
 import '../widgets/chat_drawer.dart';
 import 'chat_view.dart';
 import 'model_view.dart';
-import 'server_view.dart';
+import 'mesh_network_view.dart';
 import 'settings_view.dart';
 import '../core/haptics.dart';
 
@@ -22,9 +22,9 @@ class HomeView extends GetView<HomeController> {
         activeIcon: Icons.layers_rounded,
         label: 'Models'),
     _NavItem(
-        icon: Icons.lan_outlined,
-        activeIcon: Icons.lan_rounded,
-        label: 'Server'),
+        icon: Icons.hub_outlined,
+        activeIcon: Icons.hub_rounded,
+        label: 'Mesh'),
     _NavItem(
         icon: Icons.settings_outlined,
         activeIcon: Icons.settings,
@@ -48,13 +48,15 @@ class HomeView extends GetView<HomeController> {
           drawerEnableOpenDragGesture: controller.currentTab.value == 0,
           drawerEdgeDragWidth: 28,
           body: Obx(() {
-            final content = IndexedStack(
-              index: controller.currentTab.value,
+            final content = PageView(
+              controller: controller.pageController,
+              onPageChanged: controller.onPageChanged,
+              physics: const BouncingScrollPhysics(),
               children: const [
                 ChatView(),
                 ModelView(),
-                ServerView(),
-                SettingsView()
+                MeshNetworkView(),
+                SettingsView(),
               ],
             );
             if (_isWide) {

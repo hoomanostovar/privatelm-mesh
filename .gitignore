@@ -108,3 +108,9 @@ downloaded_artifacts/
 # Prebuilt llama.cpp for iOS (scripts/build_llama_ios.sh)
 local_plugins/llama_flutter_android/ios/llama_ios/*
 !local_plugins/llama_flutter_android/ios/llama_ios/README.md
+
+# Release archives
+*.zip
+*.tar.gz
+*.apk
+

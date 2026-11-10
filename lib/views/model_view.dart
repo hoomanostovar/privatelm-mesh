@@ -10,6 +10,8 @@ import '../models/ai_model.dart';
 import '../services/download_service.dart';
 import '../services/inference_service.dart';
 import '../services/local_image_service.dart';
+import '../services/mesh_discovery_service.dart';
+import '../services/mesh_distribution_service.dart';
 
 const _tabular = [FontFeature.tabularFigures()];
 
@@ -1976,6 +1978,17 @@ class ModelView extends GetView<ModelController> {
                 },
               ),
             ],
+            if (downloaded) ...[
+              const SizedBox(height: 10),
+              TonalButton.neutral(
+                ctx,
+                label: 'Distribute to Mesh Devices',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showMeshDistributionSheet(context, model);
+                },
+              ),
+            ],
             if (actions.isNotEmpty) ...[
               const SizedBox(height: 18),
               AppGroup(dividerIndent: 60, children: [
@@ -1995,6 +2008,108 @@ class ModelView extends GetView<ModelController> {
             ],
           ],
         );
+      },
+    );
+  }
+
+  void _showMeshDistributionSheet(BuildContext context, AiModel model) {
+    final discovery = Get.isRegistered<MeshDiscoveryService>() ? Get.find<MeshDiscoveryService>() : null;
+    final distribution = Get.isRegistered<MeshDistributionService>() ? Get.find<MeshDistributionService>() : null;
+    final peers = discovery?.peerNodes ?? [];
+
+    if (peers.isEmpty) {
+      showToast(
+        'No other mesh devices online',
+        'Open PrivateLM Mesh on other devices connected to the same Wi-Fi or USB to distribute models.',
+        tone: ToastTone.info,
+      );
+      return;
+    }
+
+    final selected = <String>{...peers.map((p) => p.id)}.obs;
+
+    showAppSheet<void>(
+      context,
+      title: 'Distribute ${model.name}',
+      subtitle: 'Push model over local LAN / USB directly to mesh devices without using internet data.',
+      scrollable: true,
+      builder: (ctx) {
+        final t = AppTokens.of(ctx);
+        return Obx(() {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Text('Target Devices (${selected.length}/${peers.length})', style: t.label),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () {
+                      if (selected.length == peers.length) {
+                        selected.clear();
+                      } else {
+                        selected.addAll(peers.map((p) => p.id));
+                      }
+                    },
+                    child: Text(
+                      selected.length == peers.length ? 'Deselect All' : 'Select All',
+                      style: TextStyle(fontSize: 12, color: t.accent),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              AppGroup(
+                children: [
+                  for (final peer in peers)
+                    CheckboxListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                      title: Text(peer.name, style: t.bodyStrong.copyWith(fontSize: 13)),
+                      subtitle: Text(
+                        '${peer.endpoint} · ${peer.freeRamGB.toStringAsFixed(1)} GB free · ${peer.transportType}',
+                        style: t.caption.copyWith(fontSize: 11),
+                      ),
+                      secondary: Icon(peer.icon, color: t.text),
+                      value: selected.contains(peer.id),
+                      activeColor: t.accent,
+                      onChanged: (checked) {
+                        if (checked == true) {
+                          selected.add(peer.id);
+                        } else {
+                          selected.remove(peer.id);
+                        }
+                      },
+                    ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              PrimaryButton(
+                label: 'Push Model to Selected Devices',
+                icon: Icons.rocket_launch_rounded,
+                onPressed: selected.isEmpty || distribution == null
+                    ? null
+                    : () async {
+                        Navigator.pop(ctx);
+                        final targets = peers.where((p) => selected.contains(p.id)).toList();
+                        try {
+                          await distribution.distributeModelToNodes(
+                            filename: model.filename,
+                            sourceUrl: model.url,
+                            targetNodes: targets,
+                          );
+                          showToast(
+                            'Model Distribution Started',
+                            'P2P streaming ${model.name} to ${targets.length} device(s).',
+                            tone: ToastTone.success,
+                          );
+                        } catch (e) {
+                          showToast('Distribution Error', e.toString(), tone: ToastTone.error);
+                        }
+                      },
+              ),
+            ],
+          );
+        });
       },
     );
   }

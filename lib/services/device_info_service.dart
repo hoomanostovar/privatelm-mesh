@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' show IconData, Icons;
 import 'package:get/get.dart';
 
+import '../models/hardware_acceleration.dart';
 import 'device_info_native.dart' if (dart.library.html) 'device_info_web.dart'
     as platform_info;
 
@@ -18,6 +19,44 @@ class DeviceInfoService extends GetxService {
   final gpuName = ''.obs;
   final gpuVramGB = 0.0.obs;
   final deviceType = 'PC'.obs;
+
+  /// All detected video cards on the system (e.g. discrete RTX + integrated Iris/Radeon).
+  final gpus = <GpuDeviceInfo>[].obs;
+
+  /// Detected CPU architecture and instruction set acceleration features.
+  final cpuInfo = Rxn<CpuDeviceInfo>();
+
+  /// Optimal compute backend calculated for this machine's hardware.
+  ComputeBackend get recommendedBackend {
+    if (kIsWeb) return ComputeBackend.auto;
+    if (Platform.isMacOS || Platform.isIOS) return ComputeBackend.metal;
+    if (Platform.isAndroid) return ComputeBackend.vulkan;
+
+    // Check detected discrete GPUs
+    for (final gpu in gpus) {
+      if (gpu.vendor == GpuVendor.nvidia) {
+        return ComputeBackend.cuda;
+      }
+      if (gpu.vendor == GpuVendor.amd && gpu.isDiscrete) {
+        return ComputeBackend.rocm;
+      }
+    }
+
+    // Check for any GPU with Vulkan/DirectML support
+    if (gpus.isNotEmpty) {
+      if (Platform.isWindows) {
+        return ComputeBackend.directml;
+      }
+      return ComputeBackend.vulkan;
+    }
+
+    // Fall back to CPU SIMD
+    final cpu = cpuInfo.value;
+    if (cpu != null) {
+      return cpu.optimalCpuBackend;
+    }
+    return ComputeBackend.cpuAvx2;
+  }
 
   IconData get deviceIcon {
     if (kIsWeb) return Icons.language_rounded;
@@ -114,6 +153,46 @@ class DeviceInfoService extends GetxService {
     gpuName.value = (info['gpuName'] as String?) ?? '';
     gpuVramGB.value = ((info['gpuVramGB'] as num?) ?? 0.0).toDouble();
     deviceType.value = (info['deviceType'] as String?) ?? (kIsWeb ? 'Web' : Platform.isWindows ? 'PC' : 'Phone');
+
+    // Populate all discovered GPUs
+    final rawGpus = info['gpus'] as List?;
+    if (rawGpus != null && rawGpus.isNotEmpty) {
+      gpus.assignAll(rawGpus.whereType<Map>().map(GpuDeviceInfo.fromMap));
+    } else if (gpuName.value.isNotEmpty) {
+      var vendor = GpuVendor.other;
+      final lower = gpuName.value.toLowerCase();
+      if (lower.contains('nvidia') || lower.contains('geforce') || lower.contains('rtx')) {
+        vendor = GpuVendor.nvidia;
+      } else if (lower.contains('amd') || lower.contains('radeon')) {
+        vendor = GpuVendor.amd;
+      } else if (lower.contains('intel')) {
+        vendor = GpuVendor.intel;
+      } else if (lower.contains('apple')) {
+        vendor = GpuVendor.apple;
+      }
+      gpus.assignAll([
+        GpuDeviceInfo(
+          name: gpuName.value,
+          vendor: vendor,
+          vramGB: gpuVramGB.value,
+          supportedBackends: vendor.supportedBackends,
+        ),
+      ]);
+    }
+
+    // Populate CPU info
+    final rawCpu = info['cpuInfo'] as Map?;
+    if (rawCpu != null) {
+      cpuInfo.value = CpuDeviceInfo(
+        name: (rawCpu['name'] as String?) ?? 'CPU',
+        cores: (rawCpu['cores'] as num?)?.toInt() ?? Platform.numberOfProcessors,
+        threads: (rawCpu['threads'] as num?)?.toInt() ?? Platform.numberOfProcessors,
+        hasAvx2: (rawCpu['hasAvx2'] as bool?) ?? true,
+        hasAvx512: (rawCpu['hasAvx512'] as bool?) ?? false,
+        hasAmx: (rawCpu['hasAmx'] as bool?) ?? false,
+        hasNeon: (rawCpu['hasNeon'] as bool?) ?? false,
+      );
+    }
   }
 
   String get tierDescription {

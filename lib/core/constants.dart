@@ -66,6 +66,13 @@ class AppConstants {
   static const String keyServerAllowNetwork = 'server_allow_network';
   static const String keyClusterEnabled = 'cluster_enabled';
   static const String keyClusterWorkers = 'cluster_workers';
+  static const String keyComputeBackend = 'compute_backend';
+  static const String keyGpuLayers = 'gpu_layers';
+  static const String keyFlashAttention = 'flash_attention';
+  static const String keyInferenceThreads = 'inference_threads';
+  static const String keyBatchSize = 'batch_size';
+  static const String keyClusterSchedulerStrategy = 'cluster_scheduler_strategy';
+  static const String keyAdbAutoBridge = 'adb_auto_bridge';
   static const String keyImageSteps = 'image_steps';
   static const String keyImageGenForceCpu = 'image_gen_force_cpu';
   static const String keyImageGenBackend = 'image_gen_backend';
@@ -320,6 +327,69 @@ class AppConstants {
       'size': '0.8 GB',
       'description': 'Ultra-lightweight text model',
       'template': 'llama3',
+    },
+    {
+      'name': 'Qwen2.5-Coder-0.5B-Abliterated (Q4_K_M)',
+      'filename': 'qwen2.5-coder-0.5b-instruct-abliterated-q4_k_m.gguf',
+      'url':
+          'https://huggingface.co/mradermacher/Qwen2.5-Coder-0.5B-Instruct-abliterated-GGUF/resolve/main/Qwen2.5-Coder-0.5B-Instruct-abliterated.Q4_K_M.gguf',
+      'size': '397 MB',
+      'description': '🔓 Ultra-small abliterated coding & chat model — runs on any low-end device',
+      'template': 'chatml',
+    },
+    {
+      'name': 'Llama-3.2-1B-Abliterated (Q4_K_M)',
+      'filename': 'josiefied-llama-3.2-1b-instruct-abliterated-v1-q4_k_m.gguf',
+      'url':
+          'https://huggingface.co/mradermacher/Josiefied-Llama-3.2-1B-Instruct-abliterated-v1-GGUF/resolve/main/Josiefied-Llama-3.2-1B-Instruct-abliterated-v1.Q4_K_M.gguf',
+      'size': '807 MB',
+      'description': '🔓 Compact abliterated Llama 3.2 — completely unrestricted',
+      'template': 'llama3',
+    },
+    {
+      'name': 'Qwen2.5-1.5B-Abliterated (Q4_K_M)',
+      'filename': 'josiefied-qwen2.5-1.5b-instruct-abliterated-v1-q4_k_m.gguf',
+      'url':
+          'https://huggingface.co/Goekdeniz-Guelmez/Josiefied-Qwen2.5-1.5B-Instruct-abliterated-v1-gguf/resolve/main/josiefied-qwen2.5-1.5b-instruct-abliterated-v1.Q4_K_M.gguf',
+      'size': '1.04 GB',
+      'description': '🔓 Fast, uncensored multi-language assistant with strong general knowledge',
+      'template': 'chatml',
+    },
+    {
+      'name': 'Meta-Llama-3.1-8B-Abliterated (Q4_K_M)',
+      'filename': 'meta-llama-3.1-8b-instruct-abliterated-q4_k_m.gguf',
+      'url':
+          'https://huggingface.co/mlabonne/Meta-Llama-3.1-8B-Instruct-abliterated-GGUF/resolve/main/meta-llama-3.1-8b-instruct-abliterated.Q4_K_M.gguf',
+      'size': '4.58 GB',
+      'description': '🔓 Medium flagship abliterated model — Maxine Labonne\'s uncensored Llama 3.1 8B',
+      'template': 'llama3',
+    },
+    {
+      'name': 'Qwen2.5-7B-Abliterated (Q4_K_M)',
+      'filename': 'qwen2.5-7b-instruct-abliterated-q4_k_m.gguf',
+      'url':
+          'https://huggingface.co/mradermacher/Qwen2.5-7B-Instruct-abliterated-GGUF/resolve/main/Qwen2.5-7B-Instruct-abliterated.Q4_K_M.gguf',
+      'size': '4.36 GB',
+      'description': '🔓 Medium abliterated Qwen 2.5 7B — exceptional reasoning, math, and writing',
+      'template': 'chatml',
+    },
+    {
+      'name': 'Hermes-3-Llama-3.1-8B (Q4_K_M)',
+      'filename': 'hermes-3-llama-3.1-8b-q4_k_m.gguf',
+      'url':
+          'https://huggingface.co/bartowski/Hermes-3-Llama-3.1-8B-GGUF/resolve/main/Hermes-3-Llama-3.1-8B-Q4_K_M.gguf',
+      'size': '4.58 GB',
+      'description': 'Nous Research flagship open-weights agentic model with long context reasoning',
+      'template': 'chatml',
+    },
+    {
+      'name': 'DeepSeek-R1-Distill-Qwen-7B (Q4_K_M)',
+      'filename': 'deepseek-r1-distill-qwen-7b-q4_k_m.gguf',
+      'url':
+          'https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf',
+      'size': '4.68 GB',
+      'description': 'DeepSeek R1 reasoning & step-by-step thinking distilled into 7B parameters',
+      'template': 'chatml',
     },
     {
       'name': 'DreamShaper 8 LCM (SD 1.5)',

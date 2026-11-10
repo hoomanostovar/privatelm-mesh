@@ -25,6 +25,11 @@ import 'services/local_image_service.dart';
 import 'services/app_log_service.dart';
 import 'services/crash_reporting_service.dart';
 import 'services/image_generation_notification_service.dart';
+import 'services/adb_bridge_service.dart';
+import 'services/mesh_discovery_service.dart';
+import 'services/mesh_telemetry_service.dart';
+import 'services/mesh_distribution_service.dart';
+import 'services/mesh_benchmark_service.dart';
 import 'core/constants.dart';
 
 void main() {
@@ -86,7 +91,14 @@ void main() {
     final settingsController = Get.put(SettingsController());
     Get.put(CloudModelController());
 
-    if (ClusterService.isSupported) Get.put(ClusterService(), permanent: true);
+    if (ClusterService.isSupported) {
+      Get.put(AdbBridgeService(), permanent: true);
+      Get.put(MeshDiscoveryService(), permanent: true);
+      Get.put(MeshTelemetryService(), permanent: true);
+      Get.put(MeshDistributionService(), permanent: true);
+      Get.put(MeshBenchmarkService(), permanent: true);
+      Get.put(ClusterService(), permanent: true);
+    }
     Get.put(InferenceService());
     Get.put(CloudService());
     Get.put(DownloadService());
