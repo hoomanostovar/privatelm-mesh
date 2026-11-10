@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
@@ -48,7 +49,7 @@ class DesktopInferenceEngine {
       return '$home${sep}Library${sep}Application Support${sep}PrivateLM${sep}engine';
     } else {
       final home = Platform.environment['HOME'] ?? '';
-      return '$home${sep}.local${sep}share${sep}PrivateLM${sep}engine';
+      return '$home$sep.local${sep}share${sep}PrivateLM${sep}engine';
     }
   }
 
@@ -63,7 +64,7 @@ class DesktopInferenceEngine {
       '$execDir$sep$exeName',
       '$execDir${sep}bin$sep$exeName',
       '$execDir${sep}data$sep$exeName',
-      '$execDir${sep}..${sep}Resources$sep$exeName',
+      '$execDir$sep..${sep}Resources$sep$exeName',
       '$engineDir$sep$exeName',
       '${Directory.current.path}${sep}bin$sep$exeName',
       '${Directory.current.path}${sep}build\\windows\\x64\\runner\\Release$sep$exeName',
@@ -100,15 +101,20 @@ class DesktopInferenceEngine {
     }
 
     final downloadUrl =
-        'https://github.com/${AppConstants.githubRepo}/releases/download/v1.1.0-mesh/$assetName';
+        'https://github.com/${AppConstants.githubRepo}/releases/latest/download/$assetName';
     final client = http.Client();
     try {
-      print('[DesktopEngine] Auto-provisioning engine from $downloadUrl...');
-      final request = http.Request('GET', Uri.parse(downloadUrl));
-      final response = await client.send(request);
+      var request = http.Request('GET', Uri.parse(downloadUrl));
+      var response = await client.send(request);
 
       if (response.statusCode != 200) {
-        print('[DesktopEngine] Download returned ${response.statusCode}');
+        final fallbackUrl =
+            'https://github.com/${AppConstants.githubRepo}/releases/download/v1.1.1/$assetName';
+        request = http.Request('GET', Uri.parse(fallbackUrl));
+        response = await client.send(request);
+      }
+
+      if (response.statusCode != 200) {
         return null;
       }
 

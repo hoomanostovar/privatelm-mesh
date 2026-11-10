@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:get/get.dart';
+import 'cluster_service.dart';
 import 'device_info_service.dart';
 import 'hive_service.dart';
 
@@ -172,6 +173,25 @@ class MeshTelemetryService extends GetxService {
     }
     _updateLocalWattageEstimate(isInferencing: true);
     localStatus.value = 'communicating';
+
+    // Attribute tokens proportionally across active cluster workers if in a cluster split
+    if (Get.isRegistered<ClusterService>()) {
+      final cluster = Get.find<ClusterService>();
+      if (cluster.split.length > 1) {
+        for (final w in cluster.workers) {
+          final id = w.id ?? w.endpoint;
+          final existing = nodeTelemetryMap[id];
+          if (existing != null) {
+            existing.tokensGenerated += tokenCount;
+            if (instantaneousSpeed != null && instantaneousSpeed > 0) {
+              existing.tokensPerSecond = instantaneousSpeed;
+            }
+            existing.status = 'communicating';
+          }
+        }
+        nodeTelemetryMap.refresh();
+      }
+    }
   }
 
   /// Sets node status ('ready', 'communicating', 'loading', 'unloading', 'benchmarking').

@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:http/http.dart' as http;
 import 'package:llama_flutter_android/llama_flutter_android.dart';
 
 import '../core/constants.dart';
@@ -299,7 +300,7 @@ class ClusterService extends GetxService {
   /// an error message, or null on success.
   Future<String?> addManual(String input) async {
     final text = input.trim();
-    if (text.isEmpty) return 'Enter the worker phone\'s IP address';
+    if (text.isEmpty) return 'Enter the worker device\'s IP address';
     final host = text.contains(':') ? text.substring(0, text.lastIndexOf(':')) : text;
     final port = text.contains(':')
         ? int.tryParse(text.substring(text.lastIndexOf(':') + 1))
@@ -310,8 +311,16 @@ class ClusterService extends GetxService {
 
   Future<String?> addFound(ClusterWorker w) => _add(w);
 
-  /// Adds a peer node discovered via Mesh UDP Beacon.
+  /// Adds a peer node discovered via Mesh UDP Beacon, automatically waking its worker service if needed.
   Future<String?> addMeshNode(MeshNode node) async {
+    // Request remote node to ensure its worker service is running
+    try {
+      await http
+          .post(Uri.parse('http://${node.host}:50054/api/mesh/pair-worker'))
+          .timeout(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 350));
+    } catch (_) {}
+
     final worker = ClusterWorker(
       name: node.name,
       host: node.host,
@@ -380,6 +389,9 @@ class ClusterService extends GetxService {
     workers.removeWhere((w) => w.endpoint == enriched.endpoint);
     workers.add(enriched);
     found.removeWhere((w) => w.endpoint == enriched.endpoint);
+    if (role != ClusterRole.master) {
+      await _setEnabled(true);
+    }
     await _save();
     return null;
   }
@@ -602,8 +614,8 @@ class ClusterService extends GetxService {
     }
   }
 
-  /// LiteRT models can't be split across phones (the cluster is llama.cpp).
-  /// When this phone is a master with workers, asks before loading one here
+  /// LiteRT models can't be split across devices (the cluster is llama.cpp).
+  /// When this device is a master with workers, asks before loading one here
   /// alone. True to go ahead.
   Future<bool> confirmLiteRtRunsHere(String model) async {
     final context = Get.context;
@@ -612,14 +624,14 @@ class ClusterService extends GetxService {
       context,
       title: 'This model can\'t use your workers',
       subtitle: '${model.replaceAll(RegExp(r'\.(litertlm|task)$'), '')} is a LiteRT '
-          'model, and only GGUF models can be shared across phones. It will run '
-          'on this phone only. To use your workers, load a GGUF model instead.',
+          'model, and only GGUF models can be shared across mesh devices. It will run '
+          'on this device only. To use your workers, load a GGUF model instead.',
       builder: (ctx) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           PrimaryButton(
-            label: 'Load on this phone only',
-            icon: Icons.smartphone_rounded,
+            label: 'Load on this device only',
+            icon: Icons.devices_rounded,
             onPressed: () => Navigator.pop(ctx, true),
           ),
           const SizedBox(height: 10),
@@ -630,39 +642,8 @@ class ClusterService extends GetxService {
     return go == true;
   }
 
-  /// "Fits on this phone" sheet. True to share with workers anyway.
-  Future<bool> _askFitsHere(String model, double modelMb, int workerCount) async {
-    final context = Get.context;
-    if (context == null) return false;
-    final share = await showAppSheet<bool>(
-      context,
-      title: 'This model fits on this phone',
-      subtitle: '${model.replaceAll(RegExp(r'\.gguf$'), '')} needs about '
-          '${_gb(modelMb)}, and this phone has room for it. Running it here '
-          'is faster, because sharing sends every word over Wi-Fi. Share it '
-          'to free up memory on this phone.',
-      builder: (ctx) => Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          PrimaryButton(
-            label: 'Load on this phone only',
-            icon: Icons.smartphone_rounded,
-            onPressed: () => Navigator.pop(ctx, false),
-          ),
-          const SizedBox(height: 10),
-          TonalButton.neutral(
-            ctx,
-            label: 'Share with $workerCount worker${workerCount == 1 ? '' : 's'}',
-            onTap: () => Navigator.pop(ctx, true),
-          ),
-        ],
-      ),
-    );
-    return share == true;
-  }
-
   /// Reads where the model actually went after a cluster load. Workers'
-  /// shares come from llama.cpp's per-device weight buffers; this phone's
+  /// shares come from llama.cpp's per-device weight buffers; this device's
   /// share is the rest of the file, because its own buffers overlap (the
   /// mapped file and the CPU's repacked copy of the same weights).
   Future<void> refreshSplit(String modelPath) async {
@@ -678,7 +659,7 @@ class ClusterService extends GetxService {
     final fileMb = await File(modelPath).length() / (1024 * 1024);
     final remoteMb = remote.values.fold<double>(0, (a, b) => a + b);
     split.assignAll([
-      ClusterShare(deviceName.isEmpty ? 'This phone' : deviceName,
+      ClusterShare(deviceName.isEmpty ? 'This Device' : deviceName,
           math.max(0, fileMb - remoteMb), isThisPhone: true),
       for (final e in remote.entries) ClusterShare(e.key, e.value),
     ]);

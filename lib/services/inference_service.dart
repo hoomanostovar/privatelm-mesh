@@ -5,6 +5,7 @@ import '../core/constants.dart';
 import 'device_info_service.dart';
 import 'app_log_service.dart';
 import 'cluster_service.dart';
+import 'mesh_telemetry_service.dart';
 import 'stop_sequence_filter.dart';
 
 // Conditionally import llama_flutter_android — only on Android
@@ -112,6 +113,9 @@ class InferenceService extends GetxService {
       isLoadingModel.value = true;
       loadingModelName.value = modelName ?? modelPath.split('/').last;
       modelLoadProgress.value = 0.0;
+      if (Get.isRegistered<MeshTelemetryService>()) {
+        Get.find<MeshTelemetryService>().setLocalStatus('loading');
+      }
 
       _engine = platform.InferenceEngine();
 
@@ -170,6 +174,9 @@ class InferenceService extends GetxService {
         gpuName.value = '';
         gpuLayersUsed.value = 0;
         isGpuAccelerated.value = false;
+        if (Get.isRegistered<MeshTelemetryService>()) {
+          Get.find<MeshTelemetryService>().setLocalStatus('ready');
+        }
         Get.find<AppLogService>().error(
           'Local model load failed',
           details:
@@ -182,6 +189,9 @@ class InferenceService extends GetxService {
       isLoadingModel.value = false;
       loadingModelName.value = '';
       modelLoadProgress.value = 1.0;
+      if (Get.isRegistered<MeshTelemetryService>()) {
+        Get.find<MeshTelemetryService>().setLocalStatus('ready');
+      }
       loadedModelName.value = activeModelName;
       loadedModelRuntime.value = result.runtime;
       if (result.runtime == 'llama' || result.runtime == 'litert') {
@@ -209,7 +219,7 @@ class InferenceService extends GetxService {
       if (clusterWorkers > 0) {
         final cluster = Get.find<ClusterService>();
         await cluster.refreshSplit(modelPath);
-        return 'Model loaded across ${cluster.splitSummary ?? '${clusterWorkers + 1} phones'}.';
+        return 'Model loaded across ${cluster.splitSummary ?? '${clusterWorkers + 1} devices'}.';
       }
       return result.message;
     } catch (e) {
@@ -218,6 +228,9 @@ class InferenceService extends GetxService {
       loadingModelName.value = '';
       modelLoadProgress.value = 0.0;
       loadedBackend.value = '';
+      if (Get.isRegistered<MeshTelemetryService>()) {
+        Get.find<MeshTelemetryService>().setLocalStatus('ready');
+      }
       Get.find<AppLogService>().error('Failed to load local model', details: e);
       return 'ERROR: Failed to load model — $e';
     }
@@ -226,6 +239,9 @@ class InferenceService extends GetxService {
   Future<void> unloadModel() async {
     final engine = _engine;
     _engine = null;
+    if (Get.isRegistered<MeshTelemetryService>()) {
+      Get.find<MeshTelemetryService>().setLocalStatus('unloading');
+    }
     if (Get.isRegistered<ClusterService>()) {
       Get.find<ClusterService>().clearSplit();
     }
@@ -245,6 +261,9 @@ class InferenceService extends GetxService {
     contextTokensUsed.value = 0;
     contextTokensTotal.value = 0;
     _sessionNativeRuntime = '';
+    if (Get.isRegistered<MeshTelemetryService>()) {
+      Get.find<MeshTelemetryService>().setLocalStatus('ready');
+    }
   }
 
   Future<String> generate({
@@ -348,6 +367,12 @@ class InferenceService extends GetxService {
               DateTime.now().difference(speedStart).inMilliseconds / 1000.0;
           if (elapsedSeconds > 0) {
             tokensPerSecond.value = tokenCount.value / elapsedSeconds;
+          }
+          if (Get.isRegistered<MeshTelemetryService>()) {
+            Get.find<MeshTelemetryService>().recordTokenEmission(
+              tokenCount: 1,
+              instantaneousSpeed: tokensPerSecond.value,
+            );
           }
           if (loadedModelRuntime.value == 'litert') {
             tokenFlushBuffer.write(token);

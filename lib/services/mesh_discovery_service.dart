@@ -281,6 +281,18 @@ class MeshDiscoveryService extends GetxService {
     final deviceType = dev?.deviceNoun ?? 'Device';
     final activeModel = inf?.loadedModelName.value ?? '';
 
+    String localTransport = 'wifi';
+    try {
+      final ifaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
+      for (final iface in ifaces) {
+        final name = iface.name.toLowerCase();
+        if (name.contains('ethernet') || name.startsWith('eth') || name.startsWith('enp')) {
+          localTransport = 'ethernet';
+          break;
+        }
+      }
+    } catch (_) {}
+
     final payload = jsonEncode({
       'id': localNodeId,
       'name': '${Platform.localHostname} (${dev?.deviceNoun ?? "Node"})',
@@ -290,10 +302,11 @@ class MeshDiscoveryService extends GetxService {
       'gpuVramGB': gpuVram,
       'totalRamGB': totalRam,
       'freeRamGB': freeRam,
-      'transportType': 'wifi', // Dynamic based on interface
+      'transportType': localTransport,
       'hardwareBackend': dev?.recommendedBackend.displayName ?? 'Auto',
       'status': telem?.localStatus.value ?? 'ready',
       'activeModel': activeModel,
+      'activeModelName': activeModel,
       'uptimeSeconds': telem?.localUptime.inSeconds ?? 0,
       'tokensGenerated': telem?.localTokensGenerated.value ?? 0,
       'tokensPerSec': telem?.localTokensPerSecond.value ?? 0.0,
@@ -335,6 +348,9 @@ class MeshDiscoveryService extends GetxService {
       final remoteIp = dg.address.address;
 
       final node = MeshNode.fromJson(json, remoteIp);
+      // Ignore our own loopback UDP broadcast packets so local telemetry is never double-counted
+      if (node.id == localNodeId) return;
+
       onlineNodes[node.id] = node;
 
       if (Get.isRegistered<MeshTelemetryService>()) {
@@ -352,7 +368,7 @@ class MeshDiscoveryService extends GetxService {
         if (Get.isRegistered<MeshDistributionService>()) {
           final dist = Get.find<MeshDistributionService>();
           if (dist.meshOfferedModel.value?.filename != node.activeModel) {
-            dist.meshOfferedModel.value = MeshModelOffer(
+            final offer = MeshModelOffer(
               filename: node.activeModel!,
               modelName: node.activeModelName ?? node.activeModel!,
               sizeMB: node.activeModelSizeMB ?? 4000.0,
@@ -360,6 +376,10 @@ class MeshDiscoveryService extends GetxService {
               sourceNodeName: node.name,
               p2pUrl: 'http://${node.host}:50054/models/${Uri.encodeComponent(node.activeModel!)}',
             );
+            dist.meshOfferedModel.value = offer;
+            if (dist.autoSyncOnJoin.value) {
+              unawaited(dist.syncOfferedModel(offer));
+            }
           }
         }
       }

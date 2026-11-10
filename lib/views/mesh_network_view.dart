@@ -10,6 +10,7 @@ import '../controllers/server_controller.dart';
 import '../core/haptics.dart';
 import '../core/ui.dart';
 import '../models/hardware_acceleration.dart';
+import '../models/transport_type.dart';
 import '../services/adb_bridge_service.dart';
 import '../services/cluster_service.dart';
 import '../services/device_info_service.dart';
@@ -258,10 +259,16 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
     final t = AppTokens.of(context);
     final peers = mesh.peerNodes;
     final totalNodes = peers.length + 1;
+    final offered = distribution.meshOfferedModel.value;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
       children: [
+        if (offered != null) ...[
+          _buildOfferedModelBanner(context, offered),
+          const SizedBox(height: 12),
+        ],
+
         // 21st.dev Radar Scanner
         MeshRadarScanner(
           onlineCount: totalNodes,
@@ -281,6 +288,10 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
           tokensPerWatt: telemetry.tokensPerWatt,
           uptime: telemetry.formattedLocalUptime,
         ),
+        const SizedBox(height: 14),
+
+        // Cluster Role & Transport Controls
+        _buildClusterRoleAndControls(context),
         const SizedBox(height: 14),
 
         // Evaluated Capability Banner
@@ -371,6 +382,168 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
           ),
         ],
       ],
+    );
+  }
+
+  Widget _buildOfferedModelBanner(BuildContext context, MeshModelOffer offer) {
+    final t = AppTokens.of(context);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: t.accent.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: t.accent.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.cloud_download_rounded, color: t.accent, size: 22),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Active Mesh Model: ${offer.modelName}',
+                  style: t.bodyStrong.copyWith(fontSize: 13),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Hosted by ${offer.sourceNodeName} · Tap Join to sync model to this device',
+                  style: t.caption,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          PillButton(
+            label: 'Join & Sync',
+            primary: true,
+            onPressed: () async {
+              showToast(
+                'Joining Mesh Model',
+                'Syncing ${offer.modelName} from ${offer.sourceNodeName}...',
+                tone: ToastTone.info,
+              );
+              await distribution.syncOfferedModel(offer);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildClusterRoleAndControls(BuildContext context) {
+    final t = AppTokens.of(context);
+    final role = cluster.role;
+    final strategy = cluster.schedulerStrategy.value;
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.memory_rounded, size: 18, color: t.accent),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('This Device\'s Mesh Role', style: t.bodyStrong.copyWith(fontSize: 13.5)),
+              ),
+              OptionInfoIcon(
+                onTap: () => showOptionHelpByKey(context, 'cluster_role'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          AppSegmented<ClusterRole>(
+            selected: role,
+            items: const [
+              (ClusterRole.off, 'Standalone'),
+              (ClusterRole.master, 'Master'),
+              (ClusterRole.worker, 'Worker'),
+            ],
+            onChanged: (r) => cluster.setRole(r),
+          ),
+          if (role == ClusterRole.worker) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: t.surface,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: t.hairline),
+              ),
+              child: Row(
+                children: [
+                  StatusDot(cluster.worker.value.running ? t.green : t.orange, size: 8),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      cluster.worker.value.running
+                          ? 'Worker RPC active on ${cluster.wifiAddress.value ?? "0.0.0.0"}:50052'
+                          : 'Starting Worker RPC listener on port 50052...',
+                      style: t.caption.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (role == ClusterRole.master) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: Text('Scheduler Strategy', style: t.caption.copyWith(fontWeight: FontWeight.w600)),
+                ),
+                OptionInfoIcon(
+                  onTap: () => showOptionHelpByKey(context, 'cluster_scheduler'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            AppSegmented<ClusterSchedulerStrategy>(
+              selected: strategy,
+              items: const [
+                (ClusterSchedulerStrategy.topologyLatency, 'Topology'),
+                (ClusterSchedulerStrategy.throughputWeighted, 'Throughput'),
+                (ClusterSchedulerStrategy.capacityBalanced, 'Capacity'),
+              ],
+              onChanged: (s) => cluster.setSchedulerStrategy(s),
+            ),
+            if (adb != null && (dev?.deviceNoun == 'PC' || dev?.deviceNoun == 'Mac')) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Icon(Icons.usb_rounded, size: 16, color: t.accent),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'USB-C ADB Auto-Bridge (${adb!.usbDevices.length} connected)',
+                      style: t.caption,
+                    ),
+                  ),
+                  OptionInfoIcon(
+                    onTap: () => showOptionHelpByKey(context, 'usb_adb_bridge'),
+                  ),
+                  const SizedBox(width: 6),
+                  PillButton(
+                    label: 'Bridge USB',
+                    onPressed: () async {
+                      final count = await cluster.autoBridgeUsbDevices();
+                      showToast(
+                        'USB-C Bridge',
+                        count > 0
+                            ? 'Bridged $count USB-C device(s) over low-latency tunnel.'
+                            : 'No new USB-C debugging devices detected.',
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ],
+      ),
     );
   }
 

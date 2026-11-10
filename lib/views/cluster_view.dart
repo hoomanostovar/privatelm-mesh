@@ -539,7 +539,7 @@ class _ClusterViewState extends State<ClusterView> {
       body = _centered(context, [
         const SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 2.5)),
         const SizedBox(height: 16),
-        Text(s.running ? 'Waiting for Wi-Fi…' : 'Measuring this phone…', style: t.caption),
+        Text(s.running ? 'Waiting for network…' : 'Measuring this device…', style: t.caption),
       ]);
     } else {
       body = _centered(context, [
@@ -552,7 +552,7 @@ class _ClusterViewState extends State<ClusterView> {
           child: QrImageView(data: qr, size: 220, padding: EdgeInsets.zero),
         ),
         const SizedBox(height: 16),
-        Text('Scan this from the master phone', style: t.bodyStrong),
+        Text('Scan this from the master device', style: t.bodyStrong),
         const SizedBox(height: 6),
         Row(mainAxisSize: MainAxisSize.min, children: [
           StatusDot(t.green, size: 8),
@@ -589,11 +589,10 @@ class _ClusterViewState extends State<ClusterView> {
       ],
       AppCard(padding: const EdgeInsets.fromLTRB(16, 24, 16, 20), child: body),
       SectionFootnote(ClusterService.workerStopsWithApp
-          ? 'Keep this device plugged in, on the same Wi-Fi, with PrivateLM open: '
+          ? 'Keep this device plugged in, on the same network, with PrivateLM open: '
               'iOS pauses apps in the background. Close PrivateLM to stop sharing.'
-          : 'Keep this phone plugged in and on the same Wi-Fi, with PrivateLM '
-              'open: the screen stays on while sharing, because Android slows '
-              'background work. Set Phone cluster to Off to stop.'),
+          : 'Keep this device plugged in and on the same network, with PrivateLM '
+              'open while sharing. Set Mesh Cluster to Off to stop.'),
     ];
   }
 

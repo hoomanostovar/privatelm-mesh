@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
+import 'cluster_service.dart';
 import 'download_service.dart';
 import 'hive_service.dart';
 import 'mesh_discovery_service.dart';
@@ -101,6 +102,30 @@ class MeshDistributionService extends GetxService {
     }
 
     final path = request.uri.path;
+
+    // Handle peer worker auto-pair command: POST /api/mesh/pair-worker
+    if (request.method == 'POST' && path == '/api/mesh/pair-worker') {
+      try {
+        if (Get.isRegistered<ClusterService>()) {
+          final cluster = Get.find<ClusterService>();
+          if (cluster.role != ClusterRole.worker) {
+            await cluster.setRole(ClusterRole.worker);
+          }
+        }
+        request.response.statusCode = HttpStatus.ok;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'status': 'worker_ready',
+          'port': 50052,
+        }));
+        await request.response.close();
+      } catch (e) {
+        request.response.statusCode = HttpStatus.internalServerError;
+        request.response.write(jsonEncode({'error': e.toString()}));
+        await request.response.close();
+      }
+      return;
+    }
 
     // Handle peer push command: POST /api/mesh/sync
     if (request.method == 'POST' && path == '/api/mesh/sync') {
@@ -295,6 +320,31 @@ class MeshDistributionService extends GetxService {
       }
       activeTransfers.refresh();
     });
+  }
+
+  /// Public helper for joining and syncing an offered mesh model onto this device.
+  Future<void> syncOfferedModel(MeshModelOffer offer) async {
+    final key = 'local_${offer.filename}';
+    activeTransfers[key] = PeerDistributionProgress(
+      peerId: offer.sourceNodeId,
+      peerName: '${offer.sourceNodeName} → This Device',
+      filename: offer.filename,
+      status: 'transferring',
+      progress: 0.1,
+      speedMBps: 85.0,
+    );
+    _simulateProgress(key);
+    await _fetchModelFromMeshOrSource(
+      filename: offer.filename,
+      p2pUrl: offer.p2pUrl,
+      sourceUrl: offer.sourceUrl,
+    );
+    final t = activeTransfers[key];
+    if (t != null) {
+      t.progress = 1.0;
+      t.status = 'completed';
+      activeTransfers.refresh();
+    }
   }
 
   /// Download model from P2P LAN stream, falling back to source URL if needed.

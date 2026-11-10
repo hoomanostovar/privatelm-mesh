@@ -920,7 +920,7 @@ class ModelController extends GetxController {
               '$contextTokens tokens. A context of $fittingContext tokens '
               'should fit.'
           : 'This model is probably too large for the free memory on this '
-              'phone, even with a small context. Try a smaller model.';
+              'device, even with a small context. Try a smaller model or enable Mesh Cluster.';
     } else if (isCriticallyLow) {
       warning =
           'Available RAM is lower than recommended. This can crash the app if Android cannot reserve enough memory.';
@@ -1499,7 +1499,7 @@ class ModelController extends GetxController {
     bool showDetails = false;
     showAppSheet<void>(
       context,
-      title: isCluster ? 'Phone cluster couldn\'t load' : 'Model load failed',
+      title: isCluster ? 'Mesh cluster couldn\'t load' : 'Model load failed',
       subtitle: friendlyMsg,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setState) {
@@ -1511,9 +1511,9 @@ class ModelController extends GetxController {
                   padding: EdgeInsets.fromLTRB(0, 0, 0, 10)),
               if (isCluster) ...[
                 _buildTipRow(ctx, Icons.hub_outlined,
-                    'On each worker, open PrivateLM > Phone cluster and check that Worker is on and shows its QR code.'),
+                    'On each worker, open PrivateLM > Mesh and check that Worker mode is active.'),
                 _buildTipRow(ctx, Icons.wifi_rounded,
-                    'Keep every device on the same Wi-Fi. iPads must keep PrivateLM open.'),
+                    'Keep every device on the same network or USB bridge.'),
               ] else ...[
                 _buildTipRow(ctx, Icons.delete_outline_rounded,
                     'Delete the model and try redownloading it completely.'),

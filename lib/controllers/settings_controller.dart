@@ -68,7 +68,7 @@ class SettingsController extends GetxController {
   final imageGenSize = AppConstants.defaultImageGenSize.obs;
   final fontScale = AppConstants.defaultFontScale.obs;
   final hapticsEnabled = true.obs;
-  final appVersion = ''.obs;
+  final appVersion = '1.1.1'.obs;
 
   // Persistent text controllers for settings fields
   final openaiKeyController = TextEditingController();
@@ -111,9 +111,11 @@ class SettingsController extends GetxController {
   Future<void> _loadAppVersion() async {
     try {
       final packageInfo = await PackageInfo.fromPlatform();
-      appVersion.value = packageInfo.version;
+      if (packageInfo.version.isNotEmpty) {
+        appVersion.value = packageInfo.version;
+      }
     } catch (_) {
-      appVersion.value = '';
+      appVersion.value = '1.1.1';
     }
   }
 

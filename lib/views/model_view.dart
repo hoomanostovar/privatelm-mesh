@@ -143,7 +143,7 @@ class ModelView extends GetView<ModelController> {
     showAppSheet<void>(
       context,
       title: 'Import model',
-      subtitle: 'Add .gguf, .litertlm or .safetensors files from your phone.',
+      subtitle: 'Add .gguf, .litertlm or .safetensors files from your device.',
       builder: (ctx) => AppGroup(dividerIndent: 60, children: [
         AppRow(
           icon: Icons.insert_drive_file_outlined,
@@ -193,7 +193,7 @@ class ModelView extends GetView<ModelController> {
   Widget _buildEmptyLibrary(BuildContext context) {
     return EmptyState(
       icon: Icons.download_rounded,
-      title: 'No models on this phone yet',
+      title: 'No models on this device yet',
       message: 'Download one from Browse, or import a model file.',
       action: Wrap(spacing: 8, children: [
         PillButton(
@@ -1418,7 +1418,7 @@ class ModelView extends GetView<ModelController> {
       context,
       title: isToDownloadsFolder ? 'Save to Downloads' : 'Download model',
       subtitle: isToDownloadsFolder
-          ? 'Save ${model.name} to your phone\'s public Downloads folder.'
+          ? 'Save ${model.name} to your device\'s Downloads folder.'
           : 'Download ${model.name} for use in the app.',
       builder: (ctx) {
         final t = AppTokens.of(ctx);
@@ -1554,7 +1554,7 @@ class ModelView extends GetView<ModelController> {
           primaryAction = Row(mainAxisSize: MainAxisSize.min, children: [
             Icon(Icons.check_rounded, size: 15, color: t.muted),
             const SizedBox(width: 4),
-            Text('On phone', style: t.small),
+            Text('Downloaded', style: t.small),
           ]);
         }
       } else {
@@ -1592,7 +1592,7 @@ class ModelView extends GetView<ModelController> {
             model.url.trim().isNotEmpty)
           (
             Icons.save_alt_rounded,
-            'Save to phone Downloads folder',
+            'Save to Downloads folder',
             false,
             () => _confirmDownload(context, model, isToDownloadsFolder: true),
           ),
@@ -1748,7 +1748,7 @@ class ModelView extends GetView<ModelController> {
         child: Row(children: [
           Expanded(
               child:
-                  Text('On this phone · ${models.length}', style: t.caption)),
+                  Text('On this device · ${models.length}', style: t.caption)),
           _sortAction(),
         ]),
       ),

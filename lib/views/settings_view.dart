@@ -235,8 +235,8 @@ class SettingsView extends GetView<SettingsController> {
   Widget _buildInferenceGroup(BuildContext context) {
     return AppGroup(dividerIndent: 60, children: [
       AppRow(
-        icon: Icons.phone_iphone_rounded,
-        title: 'Local (on-device)',
+        icon: Icons.devices_rounded,
+        title: 'Local (on-device / mesh)',
         subtitle: _localSubtitle(),
         selected: controller.inferenceMode.value == 'local',
         onTap: () => controller.setInferenceMode('local'),
@@ -883,7 +883,7 @@ class SettingsView extends GetView<SettingsController> {
         safeMax: Get.find<DeviceInfoService>().maxSafeTokens.toDouble(),
         onChanged: (v) => controller.setMaxTokens(v.toInt()),
         displayValue: controller.maxTokens.value.toString(),
-        warning: 'Your phone may crash with this value!',
+        warning: 'High values may exceed available device memory!',
         onInfoTap: () => showOptionHelpSheet(
           context,
           title: 'Max Output Tokens (Generation Limit)',
