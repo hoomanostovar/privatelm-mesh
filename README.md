@@ -115,16 +115,16 @@ The `InferenceService` exposes `supportsLocalInference` and delegates to `Deskto
 
 ## Supported Platforms & Download Links
 
-Latest binaries are available on the [**GitHub Releases Page (v1.1.0-mesh)**](https://github.com/hoomanostovar/privatelm-mesh/releases/tag/v1.1.0-mesh).
+Latest binaries are available on the [**GitHub Releases Page (v1.1.1 — Latest)**](https://github.com/hoomanostovar/privatelm-mesh/releases/latest).
 
 | Platform | Local Inference & GPU Backend | Cluster Pooling (RPC) | Cloud APIs | Release Package |
 | :--- | :--- | :--- | :--- | :--- |
-| **Windows PC** | ✅ NVIDIA CUDA / AVX2 CPU | ✅ Coordinator + Worker | ✅ Yes | [`PrivateLM-Mesh-Windows-x64.zip`](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.1.0-mesh/PrivateLM-Mesh-Windows-x64.zip) |
-| **macOS** | ✅ Apple Silicon Metal | ✅ Coordinator + Worker | ✅ Yes | [`PrivateLM-Mesh-macOS.zip`](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.1.0-mesh/PrivateLM-Mesh-macOS.zip) |
-| **Linux x64** | ✅ Vulkan / AVX-512 CPU | ✅ Coordinator + Worker | ✅ Yes | [`PrivateLM-Mesh-Linux-x64.tar.gz`](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.1.0-mesh/PrivateLM-Mesh-Linux-x64.tar.gz) |
-| **Android** | ✅ Vulkan / NEON (ARM64) | ✅ Mobile Coordinator | ✅ Yes | [`PrivateLM-Mesh-Android.apk`](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.1.0-mesh/PrivateLM-Mesh-Android.apk) |
-| **iOS / iPad** | ✅ Apple Metal | 🔄 In Progress | ✅ Yes | AltStore IPA |
-| **Headless Workers** | ✅ CUDA / Metal / CPU | ✅ Dedicated Worker | ➖ | [`PrivateLM-Mesh-Worker-Windows-x64.zip`](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.1.0-mesh/PrivateLM-Mesh-Worker-Windows-x64.zip), `rpc-server-*` |
+| **Windows PC** | ✅ NVIDIA CUDA / ROCm / Vulkan / DirectML / AVX2 | ✅ Coordinator + Worker | ✅ Yes | [`PrivateLM-Mesh-Windows-x64.zip`](https://github.com/hoomanostovar/privatelm-mesh/releases/latest/download/PrivateLM-Mesh-Windows-x64.zip) |
+| **macOS** | ✅ Apple Silicon Metal | ✅ Coordinator + Worker | ✅ Yes | [`PrivateLM-Mesh-macOS.zip`](https://github.com/hoomanostovar/privatelm-mesh/releases/latest/download/PrivateLM-Mesh-macOS.zip) |
+| **Linux x64** | ✅ CUDA / ROCm / Vulkan / AVX-512 CPU | ✅ Coordinator + Worker | ✅ Yes | [`PrivateLM-Mesh-Linux-x64.tar.gz`](https://github.com/hoomanostovar/privatelm-mesh/releases/latest/download/PrivateLM-Mesh-Linux-x64.tar.gz) |
+| **Android** | ✅ Vulkan / NEON (ARM64) | ✅ Coordinator + Worker | ✅ Yes | [`PrivateLM-Mesh-Android.apk`](https://github.com/hoomanostovar/privatelm-mesh/releases/latest/download/PrivateLM-Mesh-Android.apk) |
+| **iOS / iPad** | ✅ Apple Metal | ✅ Worker / Coordinator | ✅ Yes | AltStore IPA |
+| **Headless Workers** | ✅ CUDA / Metal / CPU | ✅ Dedicated Worker | ➖ | [`PrivateLM-Mesh-Worker-Windows-x64.zip`](https://github.com/hoomanostovar/privatelm-mesh/releases/latest/download/PrivateLM-Mesh-Worker-Windows-x64.zip), `rpc-server-*` |
 | **Rust Daemons** | ⚡ Zero-dependency | 📡 Auto-Discovery | ➖ | `privatelm-mesh-daemon-*.zip/tar.gz` |
 
 ---
