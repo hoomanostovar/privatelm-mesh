@@ -159,6 +159,95 @@ class DesktopInferenceEngine {
     return null;
   }
 
+  /// Helper to spawn llama-server process and wait until the health endpoint is 200 OK.
+  Future<({bool success, String? error, int? exitCode})> _startProcessAndAwaitHealth({
+    required String binary,
+    required List<String> args,
+    void Function(double)? onProgress,
+    int timeoutSeconds = 60,
+  }) async {
+    final stderrLines = <String>[];
+
+    if (Platform.isWindows) {
+      try {
+        Process.runSync('taskkill', ['/F', '/IM', 'llama-server.exe', '/T']);
+      } catch (_) {}
+    }
+    // Allow OS network stack to release port cleanly
+    await Future.delayed(const Duration(milliseconds: 350));
+
+    try {
+      _serverProcess = await Process.start(
+        binary,
+        args,
+        workingDirectory: File(binary).parent.path,
+        mode: ProcessStartMode.normal,
+      );
+
+      _serverProcess!.stdout
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+        final trimmed = line.trim();
+        if (trimmed.isNotEmpty) print('[llama-server] $trimmed');
+      });
+
+      _serverProcess!.stderr
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+        final trimmed = line.trim();
+        if (trimmed.isNotEmpty) {
+          stderrLines.add(trimmed);
+          if (stderrLines.length > 30) stderrLines.removeAt(0);
+          print('[llama-server:err] $trimmed');
+        }
+      });
+
+      final healthUri = Uri.parse('http://127.0.0.1:$port/health');
+      final maxIters = timeoutSeconds * 2;
+      for (var i = 0; i < maxIters; i++) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        onProgress?.call(0.1 + (i / maxIters.toDouble()) * 0.85);
+
+        final exitCode = await _serverProcess?.exitCode.timeout(
+          const Duration(milliseconds: 10),
+          onTimeout: () => -999,
+        );
+        if (exitCode != -999) {
+          final errDetail = stderrLines.isNotEmpty ? stderrLines.join(' | ') : 'Process terminated';
+          return (
+            success: false,
+            error: 'llama-server exited with code $exitCode: $errDetail',
+            exitCode: exitCode,
+          );
+        }
+
+        try {
+          final res = await http.get(healthUri).timeout(const Duration(seconds: 1));
+          if (res.statusCode == 200) {
+            return (success: true, error: null, exitCode: null);
+          }
+          if (res.statusCode == 503) {
+            print('[DesktopEngine] llama-server loading weights (HTTP 503)...');
+          }
+        } catch (_) {}
+      }
+
+      return (
+        success: false,
+        error: 'Timed out waiting for local llama-server to start.',
+        exitCode: null,
+      );
+    } catch (e) {
+      return (
+        success: false,
+        error: 'Failed to launch desktop inference engine: $e',
+        exitCode: null,
+      );
+    }
+  }
+
   /// Start `llama-server` with the model, GPU layers, hardware acceleration, and cluster workers.
   Future<LoadResult> loadModel({
     required String modelPath,
@@ -175,6 +264,7 @@ class DesktopInferenceEngine {
         Process.runSync('taskkill', ['/F', '/IM', 'llama-server.exe', '/T']);
       } catch (_) {}
     }
+    await Future.delayed(const Duration(milliseconds: 300));
 
     // Resolve model file path robustly
     var resolvedModelFile = File(modelPath);
@@ -236,7 +326,7 @@ class DesktopInferenceEngine {
 
     // Read user-configured GPU offload layers or use auto
     final savedGpuLayers = hive?.getSetting<int>(AppConstants.keyGpuLayers) ?? gpuLayers;
-    final effectiveGpuLayers = savedGpuLayers >= 0
+    var effectiveGpuLayers = savedGpuLayers >= 0
         ? savedGpuLayers
         : (_activeBackend.isGpu && hasGpu ? 99 : (hasGpu ? 99 : 0));
 
@@ -250,7 +340,26 @@ class DesktopInferenceEngine {
     final flashAttention = hive?.getSetting<bool>(AppConstants.keyFlashAttention, defaultValue: true) ?? true;
     final batchSize = hive?.getSetting<int>(AppConstants.keyBatchSize, defaultValue: 512) ?? 512;
 
-    final args = <String>[
+    // Pre-flight check for RPC endpoints: verify workers are actually alive before passing to llama-server.
+    // If an unreachable RPC endpoint is passed to llama-server, ggml-rpc aborts and crashes the entire process.
+    final verifiedRpcEndpoints = <String>[];
+    if (rpcEndpoints != null && rpcEndpoints.isNotEmpty) {
+      for (final ep in rpcEndpoints) {
+        try {
+          final parts = ep.split(':');
+          final host = parts[0];
+          final portNum = parts.length > 1 ? (int.tryParse(parts[1]) ?? 50052) : 50052;
+          final socket = await Socket.connect(host, portNum, timeout: const Duration(milliseconds: 500));
+          socket.destroy();
+          verifiedRpcEndpoints.add(ep);
+          print('[DesktopEngine] RPC worker $ep is online and responsive.');
+        } catch (_) {
+          print('[DesktopEngine] RPC worker $ep is unreachable; excluding to prevent crash.');
+        }
+      }
+    }
+
+    var args = <String>[
       '--model', resolvedModelPath,
       '--port', '$port',
       '--host', '127.0.0.1',
@@ -268,135 +377,97 @@ class DesktopInferenceEngine {
       args.addAll(['--mmproj', mmprojPath]);
     }
 
-    if (rpcEndpoints != null && rpcEndpoints.isNotEmpty) {
-      args.addAll(['--rpc', rpcEndpoints.join(',')]);
+    if (verifiedRpcEndpoints.isNotEmpty) {
+      args.addAll(['--rpc', verifiedRpcEndpoints.join(',')]);
     }
 
     print('[DesktopEngine] Launching ($activeBackend): $binary ${args.join(' ')}');
     onProgress?.call(0.1);
 
-    final stderrLines = <String>[];
+    // Phase 1: Try normal launch with active configuration
+    var launchResult = await _startProcessAndAwaitHealth(
+      binary: binary,
+      args: args,
+      onProgress: onProgress,
+    );
 
-    try {
-      _serverProcess = await Process.start(
-        binary,
-        args,
-        workingDirectory: File(binary).parent.path,
-        mode: ProcessStartMode.normal,
+    // Phase 2: If crashed and had RPC endpoints, auto-retry standalone without RPC
+    if (!launchResult.success && verifiedRpcEndpoints.isNotEmpty) {
+      print('[DesktopEngine] RPC startup failed (${launchResult.error}). Retrying in standalone local mode...');
+      final noRpcArgs = List<String>.from(args);
+      final rpcIdx = noRpcArgs.indexOf('--rpc');
+      if (rpcIdx != -1) {
+        noRpcArgs.removeAt(rpcIdx);
+        if (rpcIdx < noRpcArgs.length) noRpcArgs.removeAt(rpcIdx);
+      }
+      launchResult = await _startProcessAndAwaitHealth(
+        binary: binary,
+        args: noRpcArgs,
+        onProgress: onProgress,
       );
+      if (launchResult.success) {
+        args = noRpcArgs;
+      }
+    }
 
-      _serverProcess!.stdout
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .listen((line) {
-        print('[llama-server] $line');
-      });
-
-      _serverProcess!.stderr
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .listen((line) {
-        stderrLines.add(line);
-        if (stderrLines.length > 30) stderrLines.removeAt(0);
-        print('[llama-server:err] $line');
-      });
-
-      // Wait for server health endpoint to respond with 200 OK
-      final healthUri = Uri.parse('http://127.0.0.1:$port/health');
-      var ready = false;
-      for (var i = 0; i < 120; i++) {
-        await Future.delayed(const Duration(milliseconds: 500));
-        onProgress?.call(0.1 + (i / 120.0) * 0.85);
-
-        // Check if process crashed early
-        final exitCode = await _serverProcess?.exitCode.timeout(
-          const Duration(milliseconds: 10),
-          onTimeout: () => -999,
-        );
-        if (exitCode != -999) {
-          final errDetail = stderrLines.isNotEmpty ? ': ${stderrLines.last}' : '.';
-          // If error was related to --flash-attn or arguments, retry cleanly without --flash-attn
-          final fullErr = stderrLines.join(' ');
-          if (fullErr.contains('flash-attn') && args.contains('--flash-attn')) {
-            print('[DesktopEngine] Retrying startup without --flash-attn...');
-            final safeArgs = List<String>.from(args);
-            final faIdx = safeArgs.indexOf('--flash-attn');
-            if (faIdx != -1) {
-              safeArgs.removeAt(faIdx);
-              if (faIdx < safeArgs.length && (safeArgs[faIdx] == 'on' || safeArgs[faIdx] == 'off' || safeArgs[faIdx] == 'auto')) {
-                safeArgs.removeAt(faIdx);
-              }
-            }
-            _serverProcess = await Process.start(
-              binary,
-              safeArgs,
-              workingDirectory: File(binary).parent.path,
-              mode: ProcessStartMode.normal,
-            );
-            _serverProcess!.stdout
-                .transform(utf8.decoder)
-                .transform(const LineSplitter())
-                .listen((l) => print('[llama-server] $l'));
-            _serverProcess!.stderr
-                .transform(utf8.decoder)
-                .transform(const LineSplitter())
-                .listen((l) => print('[llama-server:err] $l'));
-            continue;
-          }
-          return LoadResult(
-            success: false,
-            message: 'llama-server exited with code $exitCode$errDetail',
-          );
+    // Phase 3: If crashed and had GPU / flash attention, auto-retry in safe CPU mode
+    if (!launchResult.success && (effectiveGpuLayers > 0 || args.contains('--flash-attn'))) {
+      print('[DesktopEngine] GPU startup failed (${launchResult.error}). Retrying in safe CPU mode...');
+      final cpuArgs = List<String>.from(args);
+      final faIdx = cpuArgs.indexOf('--flash-attn');
+      if (faIdx != -1) {
+        cpuArgs.removeAt(faIdx);
+        if (faIdx < cpuArgs.length && (cpuArgs[faIdx] == 'on' || cpuArgs[faIdx] == 'off' || cpuArgs[faIdx] == 'auto')) {
+          cpuArgs.removeAt(faIdx);
         }
-
-        try {
-          final res = await http.get(healthUri).timeout(const Duration(seconds: 1));
-          // Note: llama-server returns 503 while loading model weights.
-          // Only 200 OK means the model has finished loading and is ready for inference!
-          if (res.statusCode == 200) {
-            ready = true;
-            break;
-          }
-          if (res.statusCode == 503) {
-            print('[DesktopEngine] llama-server still loading model weights (HTTP 503)...');
-          }
-        } catch (_) {}
       }
-
-      if (!ready) {
-        await unloadModel();
-        return LoadResult(
-          success: false,
-          message: 'Timed out waiting for local llama-server to start.',
-        );
+      final gpuIdx = cpuArgs.indexOf('--n-gpu-layers');
+      if (gpuIdx != -1 && gpuIdx + 1 < cpuArgs.length) {
+        cpuArgs[gpuIdx + 1] = '0';
       }
-
-      _isModelLoaded = true;
-      _ggufVisionLoaded = mmprojPath != null;
-      _currentModelPath = resolvedModelPath;
-      _currentGpuName = detectedGpu;
-      _currentGpuLayers = effectiveGpuLayers;
-
-      onProgress?.call(1.0);
-
-      final backendStr = effectiveGpuLayers > 0
-          ? '${_activeBackend.displayName} ($detectedGpu)'
-          : _activeBackend.displayName;
-      return LoadResult(
-        success: true,
-        message: 'Model loaded on $backendStr ($effectiveGpuLayers layers).',
-        gpuName: detectedGpu,
-        gpuLayers: effectiveGpuLayers,
-        runtime: 'llama',
-        backend: effectiveGpuLayers > 0 ? 'gpu' : 'cpu',
+      final rpcIdx = cpuArgs.indexOf('--rpc');
+      if (rpcIdx != -1) {
+        cpuArgs.removeAt(rpcIdx);
+        if (rpcIdx < cpuArgs.length) cpuArgs.removeAt(rpcIdx);
+      }
+      launchResult = await _startProcessAndAwaitHealth(
+        binary: binary,
+        args: cpuArgs,
+        onProgress: onProgress,
       );
-    } catch (e) {
+      if (launchResult.success) {
+        _activeBackend = ComputeBackend.cpuAvx2;
+        effectiveGpuLayers = 0;
+      }
+    }
+
+    if (!launchResult.success) {
       await unloadModel();
       return LoadResult(
         success: false,
-        message: 'Failed to launch desktop inference engine: $e',
+        message: launchResult.error ?? 'Failed to start inference engine.',
       );
     }
+
+    _isModelLoaded = true;
+    _ggufVisionLoaded = mmprojPath != null;
+    _currentModelPath = resolvedModelPath;
+    _currentGpuName = detectedGpu;
+    _currentGpuLayers = effectiveGpuLayers;
+
+    onProgress?.call(1.0);
+
+    final backendStr = effectiveGpuLayers > 0
+        ? '${_activeBackend.displayName} ($detectedGpu)'
+        : _activeBackend.displayName;
+    return LoadResult(
+      success: true,
+      message: 'Model loaded on $backendStr ($effectiveGpuLayers layers).',
+      gpuName: detectedGpu,
+      gpuLayers: effectiveGpuLayers,
+      runtime: 'llama',
+      backend: effectiveGpuLayers > 0 ? 'gpu' : 'cpu',
+    );
   }
 
   /// Generate chat completion with SSE streaming.

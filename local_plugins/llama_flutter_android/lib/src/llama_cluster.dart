@@ -317,20 +317,23 @@ class LlamaCluster {
 
   /// Whether something answers on [endpoint] ("host:port").
   static Future<bool> probe(String endpoint) async {
-    try {
-      return await _channel.invokeMethod<bool>('probe', {'endpoint': endpoint}) ?? false;
-    } on MissingPluginException {
-      // Desktop probe via standard raw TCP socket
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      // Desktop fast probe via standard raw TCP socket
       try {
         final parts = endpoint.split(':');
         final host = parts[0];
         final port = int.tryParse(parts[1]) ?? defaultPort;
-        final socket = await Socket.connect(host, port, timeout: const Duration(seconds: 2));
+        final socket = await Socket.connect(host, port, timeout: const Duration(milliseconds: 600));
         socket.destroy();
         return true;
       } catch (_) {
         return false;
       }
+    }
+    try {
+      return await _channel.invokeMethod<bool>('probe', {'endpoint': endpoint}) ?? false;
+    } catch (_) {
+      return false;
     }
   }
 
