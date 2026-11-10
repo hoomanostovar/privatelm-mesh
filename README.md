@@ -4,7 +4,7 @@
 > *Transform your personal devices into a cooperative high-performance local AI mesh.*  
 > GitHub Repository: [https://github.com/hoomanostovar/privatelm-mesh](https://github.com/hoomanostovar/privatelm-mesh)
 
-[![Release](https://img.shields.io/badge/Release-v1.1.4-blue?style=for-the-badge&logo=github)](https://github.com/hoomanostovar/privatelm-mesh/releases/latest)
+[![Release](https://img.shields.io/badge/Release-v1.1.5-blue?style=for-the-badge&logo=github)](https://github.com/hoomanostovar/privatelm-mesh/releases/latest)
 [![Platforms](https://img.shields.io/badge/Platforms-Android%20%7C%20Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20iOS-brightgreen?style=for-the-badge)](https://github.com/hoomanostovar/privatelm-mesh/releases/latest)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](./LICENSE)
 [![Zero Dependencies](https://img.shields.io/badge/Zero_External_Dependencies-100%25_Out_of_the_Box-purple?style=for-the-badge)]()
@@ -49,7 +49,7 @@ PrivateLM-Mesh is **completely self-contained and zero-setup**: all native infer
 
 ---
 
-## 📥 Downloads & Releases (v1.1.4 — Latest)
+## 📥 Downloads & Releases (v1.1.5 — Latest)
 
 Always find the latest self-contained releases on the [**GitHub Releases Page**](https://github.com/hoomanostovar/privatelm-mesh/releases/latest).
 

@@ -109,7 +109,7 @@ class DesktopInferenceEngine {
 
       if (response.statusCode != 200) {
         final fallbackUrl =
-            'https://github.com/${AppConstants.githubRepo}/releases/download/v1.1.4/$assetName';
+            'https://github.com/${AppConstants.githubRepo}/releases/download/v1.1.5/$assetName';
         request = http.Request('GET', Uri.parse(fallbackUrl));
         response = await client.send(request);
       }
@@ -428,6 +428,12 @@ class DesktopInferenceEngine {
 
     try {
       final streamedResponse = await client.send(request);
+      if (streamedResponse.statusCode != 200) {
+        final errBody = await streamedResponse.stream.bytesToString();
+        print('[DesktopEngine] Error ${streamedResponse.statusCode}: $errBody');
+        yield 'ERROR: llama-server returned ${streamedResponse.statusCode}: $errBody';
+        return;
+      }
       final lines = streamedResponse.stream
           .transform(utf8.decoder)
           .transform(const LineSplitter());

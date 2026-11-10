@@ -412,7 +412,14 @@ class InferenceEngine {
       );
     }
 
-    if (_controller == null) throw Exception('No model loaded');
+    final isDesktop = Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+    if (isDesktop) {
+      if (!DesktopInferenceEngine.instance.isModelLoaded) {
+        throw Exception('No model loaded');
+      }
+    } else {
+      if (_controller == null) throw Exception('No model loaded');
+    }
     if (imagePath != null && imagePath.isNotEmpty && !_ggufVisionLoaded) {
       return 'This model can\'t read images. Load a vision model (one marked '
           'Vision in Models) to ask about photos.';
@@ -455,7 +462,6 @@ class InferenceEngine {
 
     // ── Use generateChat() for native template handling ──
     Stream<String>? stream;
-    final isDesktop = Platform.isWindows || Platform.isMacOS || Platform.isLinux;
     if (isDesktop && DesktopInferenceEngine.instance.isModelLoaded) {
       final messages = _buildChatMessages(
           prompt, conversationHistory, systemPrompt,
