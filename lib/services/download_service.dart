@@ -54,7 +54,18 @@ class DownloadService extends GetxService with WidgetsBindingObserver {
   Future<String> get modelsDir async => await platform_dl.getModelsDir();
 
   Future<String> modelPath(String filename) async {
-    return '${await modelsDir}/$filename';
+    final direct = File(filename);
+    if (direct.isAbsolute && direct.existsSync()) {
+      return direct.path;
+    }
+    final base = filename.split(RegExp(r'[/\\]')).last;
+    final dir = await modelsDir;
+    final sep = !kIsWeb ? Platform.pathSeparator : '/';
+    final resolved = File('$dir$sep$base');
+    if (resolved.existsSync()) {
+      return resolved.path;
+    }
+    return '$dir$sep$base';
   }
 
   Future<bool> isModelDownloaded(String filename) async {

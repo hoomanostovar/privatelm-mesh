@@ -109,7 +109,7 @@ class DesktopInferenceEngine {
 
       if (response.statusCode != 200) {
         final fallbackUrl =
-            'https://github.com/${AppConstants.githubRepo}/releases/download/v1.1.3/$assetName';
+            'https://github.com/${AppConstants.githubRepo}/releases/download/v1.1.4/$assetName';
         request = http.Request('GET', Uri.parse(fallbackUrl));
         response = await client.send(request);
       }
@@ -170,6 +170,42 @@ class DesktopInferenceEngine {
     void Function(double)? onProgress,
   }) async {
     await unloadModel();
+    if (Platform.isWindows) {
+      try {
+        Process.runSync('taskkill', ['/F', '/IM', 'llama-server.exe', '/T']);
+      } catch (_) {}
+    }
+
+    // Resolve model file path robustly
+    var resolvedModelFile = File(modelPath);
+    String resolvedModelPath = resolvedModelFile.path;
+    if (!resolvedModelFile.existsSync()) {
+      final basename = modelPath.split(RegExp(r'[/\\]')).last;
+      final candidates = [
+        modelPath,
+        resolvedModelFile.absolute.path,
+        if (Platform.isWindows && Platform.environment['USERPROFILE'] != null)
+          '${Platform.environment['USERPROFILE']}\\Documents\\models\\$basename',
+        if (Platform.environment['HOME'] != null)
+          '${Platform.environment['HOME']}/models/$basename',
+        'models/$basename',
+      ];
+      for (final c in candidates) {
+        if (File(c).existsSync()) {
+          resolvedModelFile = File(c);
+          resolvedModelPath = resolvedModelFile.absolute.path;
+          break;
+        }
+      }
+    }
+
+    if (!resolvedModelFile.existsSync()) {
+      return LoadResult(
+        success: false,
+        message: 'Model file not found on disk: $modelPath',
+      );
+    }
+    resolvedModelPath = resolvedModelFile.absolute.path;
 
     var binary = findBinary();
     if (binary == null) {
@@ -215,7 +251,7 @@ class DesktopInferenceEngine {
     final batchSize = hive?.getSetting<int>(AppConstants.keyBatchSize, defaultValue: 512) ?? 512;
 
     final args = <String>[
-      '--model', modelPath,
+      '--model', resolvedModelPath,
       '--port', '$port',
       '--host', '127.0.0.1',
       '--ctx-size', '$contextSize',
@@ -332,7 +368,7 @@ class DesktopInferenceEngine {
 
       _isModelLoaded = true;
       _ggufVisionLoaded = mmprojPath != null;
-      _currentModelPath = modelPath;
+      _currentModelPath = resolvedModelPath;
       _currentGpuName = detectedGpu;
       _currentGpuLayers = effectiveGpuLayers;
 
@@ -439,6 +475,11 @@ class DesktopInferenceEngine {
       } catch (_) {
         p.kill();
       }
+    }
+    if (Platform.isWindows) {
+      try {
+        Process.runSync('taskkill', ['/F', '/IM', 'llama-server.exe', '/T']);
+      } catch (_) {}
     }
   }
 }

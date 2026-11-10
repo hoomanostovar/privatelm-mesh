@@ -632,11 +632,30 @@ class InferenceEngine {
           LiteLmContent.audioFile(audioPath),
       ];
 
+      int samePieceStreak = 0;
+      String lastPieceNormalized = '';
+
       _subscription =
           _liteConversation!.sendMultimodalMessageStream(contents).listen(
         (delta) {
           var text = _cleanLiteRtChunk(delta.text);
           if (text.isEmpty) return;
+
+          final norm = text.trim();
+          if (norm.length >= 2) {
+            if (norm == lastPieceNormalized) {
+              samePieceStreak++;
+              if (samePieceStreak >= 4) {
+                print(
+                    '[Inference] LiteRT multimodal repetition guard triggered ("$norm" x$samePieceStreak) — stopping generation');
+                finish(buffer.toString());
+                return;
+              }
+            } else {
+              lastPieceNormalized = norm;
+              samePieceStreak = 1;
+            }
+          }
 
           if (!hasVisibleOutput) {
             if (!_hasPrintableText(text)) return;
@@ -693,10 +712,29 @@ class InferenceEngine {
       return completer.future;
     }
 
+    int samePieceStreak = 0;
+    String lastPieceNormalized = '';
+
     _subscription = _liteConversation!.sendMessageStream(prompt).listen(
       (delta) {
         var text = _cleanLiteRtChunk(delta.text);
         if (text.isEmpty) return;
+
+        final norm = text.trim();
+        if (norm.length >= 2) {
+          if (norm == lastPieceNormalized) {
+            samePieceStreak++;
+            if (samePieceStreak >= 4) {
+              print(
+                  '[Inference] LiteRT repetition guard triggered ("$norm" x$samePieceStreak) — stopping generation');
+              finish(buffer.toString());
+              return;
+            }
+          } else {
+            lastPieceNormalized = norm;
+            samePieceStreak = 1;
+          }
+        }
 
         if (!hasVisibleOutput) {
           if (!_hasPrintableText(text)) return;
@@ -1039,20 +1077,31 @@ class InferenceEngine {
   String _buildGemma(
       String msg, List<Map<String, String>>? history, String sys) {
     final buf = StringBuffer();
-    buf.write(
-        '<start_of_turn>user\n$sys<end_of_turn>\n<start_of_turn>model\nUnderstood.<end_of_turn>\n');
-    if (history != null) {
+    bool firstUserTurn = true;
+    final sysText = sys.trim();
+
+    if (history != null && history.isNotEmpty) {
       final recent =
-          history.length > 4 ? history.sublist(history.length - 4) : history;
+          history.length > 6 ? history.sublist(history.length - 6) : history;
       for (final m in recent) {
         final role = m['role'] == 'assistant' ? 'model' : 'user';
         final content = m['content'] ?? '';
         final trunc =
-            content.length > 300 ? '${content.substring(0, 300)}...' : content;
-        buf.write('<start_of_turn>$role\n$trunc<end_of_turn>\n');
+            content.length > 500 ? '${content.substring(0, 500)}...' : content;
+        if (role == 'user' && firstUserTurn && sysText.isNotEmpty) {
+          buf.write('<start_of_turn>user\n$sysText\n\n$trunc<end_of_turn>\n');
+          firstUserTurn = false;
+        } else {
+          buf.write('<start_of_turn>$role\n$trunc<end_of_turn>\n');
+        }
       }
     }
-    buf.write('<start_of_turn>user\n$msg<end_of_turn>\n<start_of_turn>model\n');
+
+    if (firstUserTurn && sysText.isNotEmpty) {
+      buf.write('<start_of_turn>user\n$sysText\n\n$msg<end_of_turn>\n<start_of_turn>model\n');
+    } else {
+      buf.write('<start_of_turn>user\n$msg<end_of_turn>\n<start_of_turn>model\n');
+    }
     return buf.toString();
   }
 
