@@ -111,21 +111,28 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
             Text('Mesh Network', style: t.bodyStrong.copyWith(fontSize: 18)),
             const Spacer(),
             Obx(() {
-              final count = mesh.peerNodes.length + 1;
+              final onlineCount = mesh.onlinePeerNodes.length + 1;
+              final offlineCount = mesh.offlinePeerNodes.length;
               return Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                   color: t.surface,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: t.hairline),
+                  border: Border.all(
+                    color: offlineCount > 0
+                        ? t.orange.withValues(alpha: 0.6)
+                        : t.hairline,
+                  ),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    StatusDot(t.green, size: 7),
+                    StatusDot(offlineCount > 0 ? t.orange : t.green, size: 7),
                     const SizedBox(width: 6),
                     Text(
-                      '$count Online',
+                      offlineCount > 0
+                          ? '$onlineCount Online · $offlineCount Offline'
+                          : '$onlineCount Online',
                       style: t.caption.copyWith(fontWeight: FontWeight.w600, fontSize: 11),
                     ),
                   ],
@@ -357,7 +364,7 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
         // Local Device Node
         MeshNodeCard(
           icon: _deviceIcon(dev?.deviceNoun ?? 'PC'),
-          title: '${cluster.deviceName.isEmpty ? "This Device" : cluster.deviceName} (Local Host)',
+          title: '${mesh.localDisplayName} (This Device)',
           subtitle: [
             dev?.recommendedBackend.displayName ?? 'Auto',
             if ((dev?.gpuVramGB.value ?? 0) > 0)
@@ -372,26 +379,50 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
           wattage: telemetry.localWattage.value,
           status: telemetry.localStatus.value,
           isLocal: true,
+          trailing: IconButton(
+            icon: Icon(Icons.edit_rounded, size: 17, color: t.accent),
+            tooltip: 'Rename this device across mesh',
+            onPressed: () => showMeshDeviceRenameDialog(
+              context: context,
+              discovery: mesh,
+              nodeId: mesh.localNodeId,
+              currentName: mesh.localDisplayName,
+              host: cluster.wifiAddress.value,
+            ),
+          ),
         ),
 
-        // Remote Mesh Nodes
+        // Remote Mesh Nodes (Online + Known Offline/Crashed Nodes)
         for (final peer in peers) ...[
           MeshNodeCard(
             icon: peer.icon,
-            title: peer.name,
+            title: peer.isOffline ? '${peer.name} (OFFLINE)' : peer.name,
             subtitle: [
-              peer.endpoint,
+              peer.isOffline ? 'Last IP: ${peer.host}' : peer.endpoint,
+              peer.deviceType,
               peer.hardwareBackend,
               if (peer.gpuVramGB > 0) '${peer.gpuVramGB.toStringAsFixed(1)} GB VRAM',
-              '${peer.freeRamGB.toStringAsFixed(1)} GB free RAM',
+              '${peer.freeRamGB.toStringAsFixed(1)} GB RAM',
             ].join(' · '),
-            transportType: peer.transportType,
-            latencyMs: cluster.workers.firstWhereOrNull((w) => w.endpoint == peer.endpoint)?.latencyMs,
-            uptime: telemetry.nodeTelemetryMap[peer.id]?.formattedUptime ?? 'Connected',
-            tokensGenerated: telemetry.nodeTelemetryMap[peer.id]?.tokensGenerated ?? 0,
-            tokensPerSec: telemetry.nodeTelemetryMap[peer.id]?.tokensPerSecond ?? 0.0,
-            wattage: telemetry.nodeTelemetryMap[peer.id]?.wattage ?? 18.0,
-            status: telemetry.nodeTelemetryMap[peer.id]?.status ?? 'ready',
+            transportType: peer.isOffline ? 'Unreachable' : peer.transportType,
+            latencyMs: peer.isOffline
+                ? null
+                : cluster.workers.firstWhereOrNull((w) => w.endpoint == peer.endpoint)?.latencyMs,
+            uptime: peer.isOffline
+                ? 'Offline / Crashed'
+                : (telemetry.nodeTelemetryMap[peer.id]?.formattedUptime ?? 'Connected'),
+            tokensGenerated: peer.isOffline
+                ? 0
+                : (telemetry.nodeTelemetryMap[peer.id]?.tokensGenerated ?? 0),
+            tokensPerSec: peer.isOffline
+                ? 0.0
+                : (telemetry.nodeTelemetryMap[peer.id]?.tokensPerSecond ?? 0.0),
+            wattage: peer.isOffline
+                ? 0.0
+                : (telemetry.nodeTelemetryMap[peer.id]?.wattage ?? 18.0),
+            status: peer.isOffline
+                ? 'offline'
+                : (telemetry.nodeTelemetryMap[peer.id]?.status ?? 'ready'),
             trailing: _buildPairTrailing(peer),
           ),
         ],
@@ -656,24 +687,65 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
   }
 
   Widget _buildPairTrailing(MeshNode peer) {
-    final isPaired = cluster.workers.any((w) => w.endpoint == peer.endpoint);
+    final isPaired = cluster.workers.any((w) => w.endpoint == peer.endpoint || w.host == peer.host);
     final t = AppTokens.of(context);
+
+    final renameBtn = IconButton(
+      icon: Icon(Icons.edit_rounded, size: 16, color: t.accent),
+      tooltip: 'Rename device across mesh',
+      onPressed: () => showMeshDeviceRenameDialog(
+        context: context,
+        discovery: mesh,
+        nodeId: peer.id,
+        currentName: peer.name,
+        host: peer.host,
+      ),
+    );
+
+    if (peer.isOffline) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          renameBtn,
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            decoration: BoxDecoration(
+              color: t.red.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: t.red.withValues(alpha: 0.45)),
+            ),
+            child: Text(
+              'OFFLINE',
+              style: t.caption.copyWith(color: t.red, fontWeight: FontWeight.w800, fontSize: 10),
+            ),
+          ),
+          IconButton(
+            icon: Icon(Icons.delete_outline_rounded, size: 16, color: t.muted),
+            tooltip: 'Forget offline device',
+            onPressed: () => mesh.forgetNode(peer.id),
+          ),
+        ],
+      );
+    }
 
     if (isPaired) {
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          renameBtn,
           Icon(Icons.check_circle_rounded, size: 16, color: t.green),
           const SizedBox(width: 4),
           Text(
-            'Paired',
+            'Pooled',
             style: t.caption.copyWith(color: t.green, fontWeight: FontWeight.bold),
           ),
           IconButton(
             icon: Icon(Icons.close_rounded, size: 16, color: t.muted),
-            tooltip: 'Unpair',
+            tooltip: 'Exclude from pool',
             onPressed: () {
-              final worker = cluster.workers.firstWhereOrNull((w) => w.endpoint == peer.endpoint);
+              final worker = cluster.workers.firstWhereOrNull(
+                (w) => w.endpoint == peer.endpoint || w.host == peer.host,
+              );
               if (worker != null) cluster.remove(worker);
             },
           ),
@@ -681,17 +753,23 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
       );
     }
 
-    return PillButton(
-      label: 'Pair',
-      primary: true,
-      onPressed: () async {
-        final err = await cluster.addMeshNode(peer);
-        if (err != null) {
-          showToast('Pairing failed', err, tone: ToastTone.error);
-        } else {
-          showToast('Paired', '${peer.name} joined the active cluster.', tone: ToastTone.success);
-        }
-      },
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        renameBtn,
+        PillButton(
+          label: 'Pool',
+          primary: true,
+          onPressed: () async {
+            final err = await cluster.addMeshNode(peer);
+            if (err != null) {
+              showToast('Pairing failed', err, tone: ToastTone.error);
+            } else {
+              showToast('Pooled', '${peer.name} joined the active mesh pool.', tone: ToastTone.success);
+            }
+          },
+        ),
+      ],
     );
   }
 

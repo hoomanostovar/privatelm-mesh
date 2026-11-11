@@ -141,6 +141,41 @@ class MeshDistributionService extends GetxService {
       return;
     }
 
+    // Handle peer device rename command: POST /api/mesh/rename
+    if (request.method == 'POST' && path == '/api/mesh/rename') {
+      try {
+        final bodyStr = await utf8.decodeStream(request);
+        final json = jsonDecode(bodyStr) as Map<String, dynamic>;
+        final targetId = json['target_id'] as String?;
+        final targetHost = json['target_host'] as String?;
+        final newName = json['name'] as String?;
+        final aliases = json['aliases'] is Map
+            ? Map<String, dynamic>.from(json['aliases'] as Map)
+            : null;
+
+        if (Get.isRegistered<MeshDiscoveryService>()) {
+          final discovery = Get.find<MeshDiscoveryService>();
+          await discovery.applyRemoteRename(
+            targetId: targetId,
+            targetHost: targetHost,
+            newName: newName,
+            incomingAliases: aliases,
+          );
+          unawaited(discovery.broadcastPresence());
+        }
+
+        request.response.statusCode = HttpStatus.ok;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'status': 'renamed'}));
+        await request.response.close();
+      } catch (e) {
+        request.response.statusCode = HttpStatus.internalServerError;
+        request.response.write(jsonEncode({'error': e.toString()}));
+        await request.response.close();
+      }
+      return;
+    }
+
     // Handle peer push command: POST /api/mesh/sync
     if (request.method == 'POST' && path == '/api/mesh/sync') {
       try {

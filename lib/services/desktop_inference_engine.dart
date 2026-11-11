@@ -109,7 +109,7 @@ class DesktopInferenceEngine {
 
       if (response.statusCode != 200) {
         final fallbackUrl =
-            'https://github.com/${AppConstants.githubRepo}/releases/download/v1.1.5/$assetName';
+            'https://github.com/${AppConstants.githubRepo}/releases/download/v1.2.0/$assetName';
         request = http.Request('GET', Uri.parse(fallbackUrl));
         response = await client.send(request);
       }

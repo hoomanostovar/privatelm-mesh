@@ -84,6 +84,10 @@ class AppConstants {
       'batch_mode_warning_accepted';
   static const String keyReasoningEffort = 'reasoning_effort'; // 'off', 'low', 'medium', 'high'
   static const String keyShowModelReasoning = 'show_model_reasoning';
+  static const String keyCustomDeviceName = 'custom_device_name';
+  static const String keyLocalNodeId = 'local_mesh_node_id';
+  static const String keyMeshDeviceAliases = 'mesh_device_aliases';
+  static const String keyKnownMeshNodes = 'known_mesh_nodes';
 
   // Default Model Config
   static const double defaultTemperature = 0.7;

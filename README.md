@@ -1,169 +1,100 @@
 # PrivateLM-Mesh
 
 > **Decentralized Heterogeneous AI Inference Cluster & Cross-Platform Client**  
-> *Transform your personal devices into a cooperative high-performance local AI mesh.*  
+> *Pool memory and compute across your personal PCs, Macs, Linux machines, tablets, and phones to run local LLMs collaboratively.*  
 > GitHub Repository: [https://github.com/hoomanostovar/privatelm-mesh](https://github.com/hoomanostovar/privatelm-mesh)
 
-[![Release](https://img.shields.io/badge/Release-v1.1.5-blue?style=for-the-badge&logo=github)](https://github.com/hoomanostovar/privatelm-mesh/releases/latest)
-[![Platforms](https://img.shields.io/badge/Platforms-Android%20%7C%20Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20iOS-brightgreen?style=for-the-badge)](https://github.com/hoomanostovar/privatelm-mesh/releases/latest)
+[![Release](https://img.shields.io/badge/Release-v1.2.0-blue?style=for-the-badge&logo=github)](https://github.com/hoomanostovar/privatelm-mesh/releases/latest)
+[![Platforms](https://img.shields.io/badge/Platforms-Windows%20%7C%20Android%20%7C%20macOS%20%7C%20Linux%20%7C%20iOS-brightgreen?style=for-the-badge)](https://github.com/hoomanostovar/privatelm-mesh/releases/latest)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](./LICENSE)
-[![Zero Dependencies](https://img.shields.io/badge/Zero_External_Dependencies-100%25_Out_of_the_Box-purple?style=for-the-badge)]()
 
 ---
 
 ## ⚡ What is PrivateLM-Mesh?
 
-**PrivateLM-Mesh** unifies local on-device LLM inference across **Windows PCs, Apple Silicon Macs, Linux rigs, Android phones, and iOS tablets** into a unified collaborative compute cluster. By pooling system RAM and GPU VRAM over your local network (LAN / Wi-Fi / Ethernet), you can run massive open-weights models (such as **Qwen 2.5 32B, Llama 3.3 70B, DeepSeek-R1, and Gemma**) that would never fit on a single phone or laptop alone.
+**PrivateLM-Mesh** connects **Windows PCs, Apple Silicon Macs, Linux machines, Android phones, and tablets** into a local peer-to-peer compute mesh. By pooling available system RAM and GPU VRAM across your local network (LAN / Wi-Fi / Ethernet / USB-C ADB), you can split and run GGUF open-weights models across multiple devices or run smaller GGUF and LiteRT models directly on a single device.
 
-PrivateLM-Mesh is **completely self-contained and zero-setup**: all native inference binaries and desktop engines are bundled or auto-provisioned. You do not need Python, Docker, Ollama, or CUDA toolkits installed to get started.
-
----
-
-## 🚀 Key Features
-
-### 🌐 Hierarchy-Free Unified Peer-to-Peer Mesh Network
-- **Equal-Peer Resource Pooling (No Dedicated Master Required)**: Every device in **Unified Mesh Pool** mode automatically contributes its local memory/compute (`rpc-server` on port `50052`) *and* can orchestrate models across the entire mesh when you interact with its UI (`llama-server` on port `50051`).
-- **Instant Mode Switching (No App Restart Needed)**: Seamlessly switch between **Unified Mesh Pool**, **Passive Worker**, and **Local Only** at any time without restarting the application.
-- **Sci-Fi HUD Memory & Model Allocation Visualizer**: Interactive real-time reactor HUD showing each device's proportional memory chamber relative to the total mesh pool, animated model fill (`TweenAnimationBuilder` + custom scanline shaders), exact GB usage, `% of model`, and assigned transformer layer ranges (`L00–L24`). Includes an interactive model selector strip and solo-node peer simulator.
-- **Zero-Config LAN/Wi-Fi Discovery**: Nodes announce capability heartbeats every 4 seconds over UDP port `50053`. Automatic `/24` subnet unicast sweep guarantees discovery even across Wi-Fi/Ethernet router bridges and Android sleep locks.
-
-### 📦 Automated One-Click P2P Model Distribution & Live Push Telemetry
-- **Direct P2P Model Sync**: Select any downloaded model on your device, mark target mesh nodes, and press **Distribute**. The model streams directly between devices over high-speed local Wi-Fi / Ethernet.
-- **Receiving-Client Push Notifications & Auto-Load Confirmation**: Receiving clients immediately display an incoming transfer toast and live progress banner (`%` and `MB/s` throughput) in both the Chat and Mesh views, automatically refresh and load the pushed model into memory upon completion, and send a `sync-ack` confirmation back to the sender.
-- **Auto-Sync on Mesh Join & Smart Fallback**: Newly connected devices can auto-sync the active working model, with automatic fallback to resume-capable origin fetching if interrupted.
-
-### ⚡ Heterogeneous Multi-GPU & CPU Layer Splitting (`ggml-rpc`)
-- **Heterogeneous Compute**: Divide transformer model layers seamlessly across NVIDIA GeForce RTX (CUDA/DirectML), Apple Silicon (Metal), Android smartphones (Vulkan/NEON), and Linux servers.
-- **Topology & Latency Optimized Scheduling**: Automatically measures link round-trip time (RTT) and node bandwidth (GB/s) to allocate layers proportionally to compute power without stalling the generation pipeline.
-- **Headless Worker Daemons**: Dedicated background worker binaries (`rpc-server` and Rust daemon `privatelm-mesh-daemon`) run with `< 10 MB` memory footprint on homelabs and home servers.
-
-### 📊 Real-Time Hardware Telemetry & Benchmarking
-- **Bento Telemetry Cards**: Live tracking of mesh tokens generated, aggregate throughput (tokens/second), individual device uptime, real-time power draw (watts), and compute efficiency (tokens/watt).
-- **Multi-Power-Tier Mesh Benchmark**: Built-in benchmark suite to stress-test your mesh cluster across 4 power profiles (**Eco, Balanced, Performance, Extreme**) to calculate maximum tokens/sec, KV cache throughput, and thermal headroom.
-
-### 🧠 Reasoning Effort Controls, Context Compaction (`/compact`) & Chat Workflow
-- **Selectable Model Reasoning Effort & Thinking Visibility**: Choose between **Off (Instant)**, **Low (Brief)**, **Medium (Balanced)**, and **High (Deep)** reasoning effort right from the Chat composer, and toggle `<think>...</think>` trace visibility on or off. Includes built-in educational info-boxes detailing **Performance & Memory Penalties** (time-to-first-answer latency and KV cache usage) and **Expected Quality Improvements** (multi-step coding, math, logic, and self-correction).
-- **DeepSeek & Claude-Inspired Compaction (`/compact`)**: Condenses lengthy conversations into a structured `<CONTEXT_SUMMARY>` covering *Primary Objectives*, *Key Constraints & User Decisions*, *Technical Context & Files*, and *Current State & Tasks*. Preserves recent active turns verbatim while purging native KV cache on the inference engine to restore speed.
-- **Dual-Engine Execution**: High-intelligence semantic summarization when models are loaded, backed by a deterministic, zero-failure pure-Dart heuristic compactor when offline.
-- **Seamless Text Selection & Block Copying**: Unified continuous text selection across paragraphs and bubbles via Flutter `SelectionArea`, single-click copy buttons for prompt/replies, and syntax-styled code cards with language tags and copy actions.
-- **Fail-Safe Offline RPC Protection**: Pre-flight socket health probing automatically detects offline cluster nodes, falling back gracefully to local compute without `0xC0000409` crash exits.
-
-### 🎨 21st.dev Obsidian Glass UI
-- **Crafted Aesthetic**: Deep obsidian canvas (`0xFF090A0D`), frosted glass cards (`GlowCard`) with ambient accent illumination, tactile spring-scaling haptic interactions (`InteractivePress`), and animated breathing status rings (`PulsingStatusDot`).
-- **Floating Glass Dock**: Translucent, bottom-anchored floating dock with sliding illuminated pills for instant, fluid navigation between Chat, Models, Network Mesh, Tasks, and Settings.
-
-### 🔒 100% Private, Autonomous, and Offline
-- All chat sessions, parameters, embeddings, and prompt caches stay strictly inside your physical hardware. No telemetry, user data, or activations ever leave your local network.
+PrivateLM-Mesh is self-contained: native desktop and mobile inference engines (`llama-server`, `rpc-server`, and Android JNI libraries) are bundled in the official release packages.
 
 ---
 
-## 📥 Downloads & Releases (v1.1.5 — Latest)
+## 🚀 Key Features in v1.2.0
 
-Always find the latest self-contained releases on the [**GitHub Releases Page**](https://github.com/hoomanostovar/privatelm-mesh/releases/latest).
+### 🌐 Hierarchy-Free Unified Peer-to-Peer Mesh
+- **Equal-Peer Resource Pooling**: In **Unified Mesh Pool** mode, every device automatically runs its local RPC worker listener (`port 50052`) to lend memory to peers while simultaneously allowing you to load and chat with models from its own UI (`port 50051`). No manual Master vs. Worker hierarchy setup is required.
+- **Instant Mode Switching (Zero Restart)**: Switch between **Unified Mesh Pool**, **Passive Worker**, and **Local Only** at any time without restarting the application.
+- **Device Silhouette & Layer Stack Visualizer**: Visualizes every device in your active mesh using form-factor silhouettes (**PC Monitor**, **Tablet**, **Smartphone**) connected by directional pipeline arrows (`→`). Stacked horizontal layer bars inside each device silhouette animate how much of the selected model (`GB`, `%`, and layer range `L00–L32`) fits in each device's memory pool.
+- **Persistent Mesh-Wide Device Renaming & Offline Identification**: Rename any device (e.g., `"Samsung S24 Kitchen"`, `"Living Room PC"`, `"Office Tablet"`) directly from the visualizer or device list. Custom names are persisted in local storage and synced across all mesh peers via UDP beacons and HTTP `/api/mesh/rename`. If one of several phones turns off, loses Wi-Fi, or crashes, it stays visible as **OFFLINE / UNREACHABLE** under its custom name so you immediately know which physical device needs attention.
+- **Automatic LAN Discovery**: Nodes broadcast presence heartbeats every 4 seconds over UDP port `50053`, paired with an automatic `/24` subnet unicast sweep to traverse Wi-Fi/Ethernet router bridges.
+
+### 📦 P2P Model Distribution & Live Receiving Telemetry
+- **Direct LAN Model Push**: Select any downloaded GGUF model on one device, select target mesh peers, and stream the model directly over your local network (`port 50054`).
+- **Receiving-Client Push Notifications & Auto-Load Confirmation**: When a model is pushed to a device, the receiving client immediately displays an incoming transfer toast and live progress bar (`%` and real-time `MB/s` speed) in both the Chat and Mesh views, refreshes its model catalog on completion, loads the model into memory, and sends a `sync-ack` confirmation back to the sender.
+
+### 🧠 Reasoning Effort Controls, Context Compaction (`/compact`) & Chat UX
+- **Selectable Model Reasoning Effort & Thinking Toggle**: Choose **Off (Instant)**, **Low (Brief)**, **Medium (Balanced)**, or **High (Deep)** reasoning effort directly from the Chat input bar, and toggle `<think>...</think>` trace visibility on or off. Includes built-in info-boxes explaining **Performance & Memory Penalties** (pre-reply thinking tokens, time-to-first-answer latency, KV cache usage) and **Expected Quality Improvements** (multi-step coding, math, logic, and self-correction).
+- **Context Compaction (`/compact`)**: Condenses long chat histories into a structured `<CONTEXT_SUMMARY>` (*Primary Objectives*, *Key Constraints & Decisions*, *Technical Context & Files*, *Current State & Next Steps*) while keeping recent turns intact and clearing native KV cache slots. Works both with a loaded model and offline via a deterministic heuristic summarizer.
+- **Unified Text Selection & Code Block Copying**: Select text continuously across paragraphs and bubbles, copy entire prompts or replies in one tap, or copy individual fenced code blocks via their language header bar.
+- **GGUF vs. LiteRT Separation**: Clearly separates multi-device **GGUF (Mesh Cluster & Cross-Platform)** models from single-device **LiteRT (Android On-Device)** models in both Browse and My Models.
+
+---
+
+## 📥 Official Downloads (v1.2.0 — Latest)
+
+Download the official `v1.2.0` binaries from the [**GitHub Releases Page**](https://github.com/hoomanostovar/privatelm-mesh/releases/tag/v1.2.0):
 
 | Platform | Local Inference & GPU Backend | Mesh Role | Package | Direct Download |
 | :--- | :--- | :--- | :--- | :--- |
-| **Android Phone / Tablet** | ✅ Vulkan / NEON / LiteRT | Coordinator & Worker | Standalone APK | [**`PrivateLM-Mesh-Android.apk`**](https://github.com/hoomanostovar/privatelm-mesh/releases/latest/download/PrivateLM-Mesh-Android.apk) |
-| **Windows PC (x64)** | ✅ NVIDIA CUDA / Vulkan / DirectML / AVX2 | Coordinator & Worker | Portable ZIP | [**`PrivateLM-Mesh-Windows-x64.zip`**](https://github.com/hoomanostovar/privatelm-mesh/releases/latest/download/PrivateLM-Mesh-Windows-x64.zip) |
-| **macOS (Apple Silicon)** | ✅ Apple Metal (M1/M2/M3/M4) | Coordinator & Worker | Portable ZIP | [**`PrivateLM-Mesh-macOS.zip`**](https://github.com/hoomanostovar/privatelm-mesh/releases/latest/download/PrivateLM-Mesh-macOS.zip) |
-| **Linux (x64)** | ✅ Vulkan / CUDA / ROCm / AVX-512 | Coordinator & Worker | Tarball | [**`PrivateLM-Mesh-Linux-x64.tar.gz`**](https://github.com/hoomanostovar/privatelm-mesh/releases/latest/download/PrivateLM-Mesh-Linux-x64.tar.gz) |
-| **Headless Windows Worker** | ✅ CUDA / Vulkan / CPU | Dedicated Worker | Worker Bundle | [**`PrivateLM-Mesh-Worker-Windows-x64.zip`**](https://github.com/hoomanostovar/privatelm-mesh/releases/latest/download/PrivateLM-Mesh-Worker-Windows-x64.zip) |
-| **Ultra-Lightweight Daemon** | ⚡ Zero-dependency Rust | Dedicated Worker / Discovery | ZIP / Tarball | [**`privatelm-mesh-daemon`**](https://github.com/hoomanostovar/privatelm-mesh/releases/latest) |
-| **iOS / iPad** | ✅ Apple Metal | Worker / Coordinator | Sideload IPA | *Available via AltStore / Sideloadly* |
+| **Windows PC (x64)** | ✅ Vulkan / CUDA / CPU AVX2 | Unified Mesh / Coordinator / Worker | Portable ZIP | [**`PrivateLM-Mesh-Windows-x64.zip`**](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.2.0/PrivateLM-Mesh-Windows-x64.zip) |
+| **Android Phone / Tablet** | ✅ Vulkan / CPU NEON / LiteRT | Unified Mesh / Coordinator / Worker | Standalone APK | [**`PrivateLM-Mesh-Android.apk`**](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.2.0/PrivateLM-Mesh-Android.apk) |
+| **macOS (Apple Silicon)** | ✅ Apple Metal | Unified Mesh / Coordinator / Worker | Portable ZIP | [**`PrivateLM-Mesh-macOS.zip`**](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.2.0/PrivateLM-Mesh-macOS.zip) |
+| **Linux (x64)** | ✅ Vulkan / CUDA / CPU | Unified Mesh / Coordinator / Worker | Tarball | [**`PrivateLM-Mesh-Linux-x64.tar.gz`**](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.2.0/PrivateLM-Mesh-Linux-x64.tar.gz) |
+| **Headless Mesh Daemon** | ⚡ Rust Discovery & Worker Daemon | Background Worker | ZIP / Tarball | [**`privatelm-mesh-daemon-windows-x64.zip`**](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.2.0/privatelm-mesh-daemon-windows-x64.zip) |
 
 ---
 
-## 🏗️ Architecture & How It Works
+## 🏗️ How the Unified Mesh Works
 
 ```
-                        ┌──────────────────────────────────────────┐
-                        │        Coordinator Node (Master)         │
-                        │   Windows PC / Mac / Linux / Android     │
-                        │     Hosts Full Model / Manages Mesh      │
-                        └────────────────────┬─────────────────────┘
-                                             │
-             ┌───────────────────────────────┼───────────────────────────────┐
-             │ ggml-rpc Layer Offload        │ P2P Model Distribution        │ UDP Mesh Beacons
-             ▼                               ▼                               ▼
-  ┌───────────────────────┐       ┌───────────────────────┐       ┌───────────────────────┐
-  │     Worker Node 1     │       │     Worker Node 2     │       │     Worker Node 3     │
-  │   NVIDIA RTX 4090     │       │   Apple Silicon M3    │       │   Android Smartphone  │
-  │   VRAM: 24 GB (CUDA)  │       │   Unified: 36 GB (Metal)│     │   RAM: 12 GB (Vulkan) │
-  │   Layers 0 -> 28      │       │   Layers 29 -> 54     │       │   Layers 55 -> 64     │
-  └───────────────────────┘       └───────────────────────┘       └───────────────────────┘
+  ┌──────────────────────┐       ┌──────────────────────┐       ┌──────────────────────┐
+  │   Gaming PC (Local)  │       │   iPad / Android Tab │       │  Samsung Phone (USB) │
+  │  [════════════════]  │       │   [══════════════]   │       │    [════════════]    │
+  │  [════════════════]  │ ────► │   [══════════════]   │ ────► │    [════════════]    │
+  │  [════════════════]  │  RPC  │   [══════════════]   │  RPC  │    [            ]    │
+  │   Layers L00 – L16   │       │    Layers L17 – L26  │       │    Layers L27 – L32  │
+  └──────────┴───────────┘       └──────────────────────┘       └──────────────────────┘
 ```
 
-### 1. Mesh Discovery & Zero-Config Pairing
-- Every node runs `MeshDiscoveryService`, transmitting encrypted UDP beacons on port `50053` announcing hostname, GPU hardware, available VRAM, free RAM, and port endpoints.
-- Automatic unicast `/24` subnet scanning overcomes AP isolation and Wi-Fi to Ethernet bridge packet filtering.
-
-### 2. Heterogeneous Execution Pipeline
-- When loading a model (e.g. `Qwen-2.5-32B-Instruct.gguf`), the coordinator divides the transformer layers according to each device's bandwidth and available memory.
-- Compute is executed cooperatively over standard TCP sockets using `llama.cpp`'s high-efficiency `ggml-rpc`.
-
-### 3. P2P Model Distribution
-- Rather than having every phone and computer download gigabytes of model files from HuggingFace, one node downloads the model and serves it via an embedded HTTP chunked streaming server (`port 50054`).
-- Target nodes download concurrently from the local server at full LAN speed (hundreds of megabytes per second).
+1. **Discovery & Persistent Naming (`UDP 50053` + `HTTP 50054`)**: Devices discover each other automatically on the LAN and sync user-defined device names so every phone, tablet, and PC is easy to identify—even if it goes offline.
+2. **Proportional Layer Splitting (`ggml-rpc` on `TCP 50052`)**: When you load a GGUF model on any device in Unified Mesh Pool mode, layers are distributed across online peers according to interconnect priority (Local Bus → USB-C ADB → Ethernet → Wi-Fi) and available memory.
+3. **Pre-Flight Socket Verification**: Before starting `llama-server`, each RPC endpoint is verified over TCP so an unreachable or powered-off peer is cleanly excluded without crashing the inference engine.
 
 ---
 
 ## 🛠️ Build from Source
 
 ### Prerequisites
-- **Flutter SDK:** `>=3.3.0` (Dart `>=3.3.0`)
-- **C++ Compiler:** MSVC 2022 (Windows), Clang (macOS), GCC 12+ (Linux), Android NDK (API 26+)
-- **CMake:** `>= 3.24`
+- **Flutter SDK**: `>=3.3.0` (Dart `>=3.3.0`)
+- **C++ Toolchain**: Visual Studio 2022 C++ workload (Windows), Xcode (macOS), Clang/GCC + CMake (Linux), Android NDK (Android)
 
-### Windows Build
+### Windows (x64)
 ```powershell
 git clone https://github.com/hoomanostovar/privatelm-mesh.git
 cd privatelm-mesh
 flutter pub get
 flutter build windows --release
 ```
-The output binary will be located in `build/windows/x64/runner/Release/`.
+Output: `build/windows/x64/runner/Release/privatelm.exe`
 
-### Android Build
-```bash
+### Android APK
+```powershell
 flutter pub get
 flutter build apk --release
 ```
-The output APK will be located in `build/app/outputs/flutter-apk/app-release.apk`.
-
-### macOS Build
-```bash
-flutter pub get
-flutter build macos --release
-```
-
-### Linux Build
-```bash
-flutter pub get
-flutter build linux --release
-```
-
-### Rust Cluster Daemon (`privatelm-mesh-daemon`)
-```bash
-cd crates/privatelm-mesh-daemon
-cargo build --release
-```
+Output: `build/app/outputs/flutter-apk/app-release.apk`
 
 ---
 
-## 📱 Hardware & Compatibility Matrix
+## 📄 License
 
-| Hardware Vendor | Acceleration API | Supported Quantizations | Notes |
-| :--- | :--- | :--- | :--- |
-| **NVIDIA RTX / GTX** | CUDA / DirectML | Q2_K – Q8_0, FP16 | Full offload with Flash Attention |
-| **Apple Silicon (M1-M4)** | Metal Performance Shaders | Q2_K – Q8_0, FP16 | High-bandwidth unified memory architecture |
-| **Qualcomm Snapdragon** | Vulkan / Adreno | Q4_0, Q4_K_M, LiteRT-LM | Native mobile GPU acceleration |
-| **Google Tensor (Pixel)** | CPU NEON / LiteRT-LM | Q4_0, Q5_K_M, LiteRT-LM | Robust single-thread and LiteRT scheduling |
-| **MediaTek Dimensity** | Vulkan / Mali | Q4_0, Q4_K_M | Fully supported with FP16 sanitization |
-| **x86_64 CPUs** | AVX2 / AVX-512 / OpenMP | All GGUF types | Automatic thread pool auto-tuning |
-
----
-
-## 📄 License & Attribution
-
-Distributed under the **MIT License**. See [`LICENSE`](./LICENSE) for full details.  
-Originally based upon concepts in `cross-platform-llm-client` by orailnoor, massively expanded and re-architected by [Hooman Ostovar](https://github.com/hoomanostovar) into the decentralized PrivateLM-Mesh platform.
+Distributed under the **MIT License**. See [`LICENSE`](./LICENSE) for details.

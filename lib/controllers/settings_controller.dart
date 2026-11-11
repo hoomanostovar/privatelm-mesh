@@ -68,7 +68,7 @@ class SettingsController extends GetxController {
   final imageGenSize = AppConstants.defaultImageGenSize.obs;
   final fontScale = AppConstants.defaultFontScale.obs;
   final hapticsEnabled = true.obs;
-  final appVersion = '1.1.5'.obs;
+  final appVersion = '1.2.0'.obs;
 
   /// Model reasoning effort level: 'off', 'low', 'medium', 'high'
   final reasoningEffort = 'medium'.obs;
@@ -121,7 +121,7 @@ class SettingsController extends GetxController {
         appVersion.value = packageInfo.version;
       }
     } catch (_) {
-      appVersion.value = '1.1.1';
+      appVersion.value = '1.2.0';
     }
   }
 

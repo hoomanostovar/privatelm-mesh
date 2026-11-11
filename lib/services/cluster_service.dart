@@ -25,6 +25,7 @@ import 'network_transport_service.dart';
 class MeshDeviceSlice {
   final String id;
   final String name;
+  final String? host;
   final String deviceType;
   final String hardwareBackend;
   final TransportType transportType;
@@ -37,10 +38,12 @@ class MeshDeviceSlice {
   final int layerStart;
   final int layerEnd;
   final bool isLocal;
+  final bool isOffline;
 
   const MeshDeviceSlice({
     required this.id,
     required this.name,
+    this.host,
     required this.deviceType,
     required this.hardwareBackend,
     required this.transportType,
@@ -53,6 +56,7 @@ class MeshDeviceSlice {
     required this.layerStart,
     required this.layerEnd,
     this.isLocal = false,
+    this.isOffline = false,
   });
 
   int get assignedLayers => assignedModelMb > 0 ? math.max(1, layerEnd - layerStart) : 0;
@@ -184,16 +188,29 @@ class ClusterService extends GetxService {
     final saved = _hive.getSetting<List>(AppConstants.keyClusterWorkers) ?? const [];
     workers.assignAll(saved.whereType<Map>().map(ClusterWorker.fromMap));
     if (isSupported) {
-      if (Platform.isIOS) {
-        DeviceInfoPlugin().iosInfo.then((info) => deviceName = info.modelName);
+      final savedCustomName = _hive.getSetting<String>(AppConstants.keyCustomDeviceName);
+      if (savedCustomName != null && savedCustomName.trim().isNotEmpty) {
+        deviceName = savedCustomName.trim();
+      } else if (Platform.isIOS) {
+        DeviceInfoPlugin().iosInfo.then((info) {
+          if (deviceName.isEmpty) deviceName = info.modelName;
+        });
       } else if (Platform.isAndroid) {
-        DeviceInfoPlugin().androidInfo.then((info) => deviceName = info.model);
+        DeviceInfoPlugin().androidInfo.then((info) {
+          if (deviceName.isEmpty) deviceName = info.model;
+        });
       } else if (Platform.isWindows) {
-        DeviceInfoPlugin().windowsInfo.then((info) => deviceName = info.computerName);
+        DeviceInfoPlugin().windowsInfo.then((info) {
+          if (deviceName.isEmpty) deviceName = info.computerName;
+        });
       } else if (Platform.isMacOS) {
-        DeviceInfoPlugin().macOsInfo.then((info) => deviceName = info.computerName);
+        DeviceInfoPlugin().macOsInfo.then((info) {
+          if (deviceName.isEmpty) deviceName = info.computerName;
+        });
       } else if (Platform.isLinux) {
-        DeviceInfoPlugin().linuxInfo.then((info) => deviceName = info.name);
+        DeviceInfoPlugin().linuxInfo.then((info) {
+          if (deviceName.isEmpty) deviceName = info.name;
+        });
       }
       refreshWorkerStatus().then((_) {
         if (worker.value.running) {
@@ -796,10 +813,20 @@ class ClusterService extends GetxService {
         : (devService?.recommendedBackend.displayName ?? 'Local GPU/CPU');
     final localType = !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux) ? 'PC' : 'Phone';
 
-    // Gather unique peer nodes from paired workers + discovered active LAN nodes
-    final peerWorkers = <ClusterWorker>[...workers];
+    // Gather unique ONLINE peer nodes from paired workers + discovered active LAN nodes
+    final onlineHosts = discovery != null
+        ? {for (final m in discovery.onlinePeerNodes) m.host}
+        : <String>{};
+    final offlineByHost = discovery != null
+        ? {for (final m in discovery.offlinePeerNodes) m.host: m}
+        : <String, MeshNode>{};
+
+    final peerWorkers = <ClusterWorker>[
+      for (final w in workers)
+        if (!offlineByHost.containsKey(w.host) || onlineHosts.contains(w.host)) w,
+    ];
     if (discovery != null) {
-      for (final m in discovery.peerNodes) {
+      for (final m in discovery.onlinePeerNodes) {
         if (m.host == wifiAddress.value || m.host == '127.0.0.1') continue;
         if (_manuallyExcludedHosts.contains(m.host)) continue;
         final already = peerWorkers.any((w) => w.host == m.host || (w.id != null && w.id == m.id));
@@ -879,12 +906,22 @@ class ClusterService extends GetxService {
       final endLayer = node.assignedMb > 0 ? math.min(totalLayers, startLayer + layerCount) : startLayer;
       currentLayer = endLayer;
 
+      final rawName = isLocal
+          ? (deviceName.isNotEmpty ? deviceName : 'This Device')
+          : w.name;
+      final resolvedName = discovery != null
+          ? discovery.resolveCustomName(
+              isLocal ? discovery.localNodeId : (w.id ?? w.endpoint),
+              host: isLocal ? wifiAddress.value : w.host,
+              fallback: rawName,
+            )
+          : rawName;
+
       slices.add(MeshDeviceSlice(
-        id: isLocal ? 'local' : (w.id ?? w.endpoint),
-        name: isLocal
-            ? (deviceName.isNotEmpty ? '$deviceName (This Device)' : 'This Device (Local Core)')
-            : w.name,
-        deviceType: isLocal ? localType : (w.deviceType ?? 'Node'),
+        id: isLocal ? (discovery?.localNodeId ?? 'local') : (w.id ?? w.endpoint),
+        name: resolvedName,
+        host: isLocal ? wifiAddress.value : w.host,
+        deviceType: isLocal ? localType : (w.deviceType ?? 'Phone'),
         hardwareBackend: isLocal ? localHw : (w.hardwareBackend ?? 'Auto'),
         transportType: isLocal ? TransportType.unknown : node.transportType,
         latencyMs: node.latencyMs,
@@ -896,7 +933,36 @@ class ClusterService extends GetxService {
         layerStart: startLayer,
         layerEnd: endLayer,
         isLocal: isLocal,
+        isOffline: false,
       ));
+    }
+
+    // Append known offline/crashed mesh nodes so user can immediately see which named device went down
+    if (discovery != null) {
+      for (final offNode in discovery.offlinePeerNodes) {
+        if (slices.any((s) => s.id == offNode.id || (s.host != null && s.host == offNode.host))) {
+          continue;
+        }
+        final offCapMb = math.max(1024.0, offNode.freeRamGB * 1024 * 0.78);
+        slices.add(MeshDeviceSlice(
+          id: offNode.id,
+          name: discovery.resolveCustomName(offNode.id, host: offNode.host, fallback: offNode.name),
+          host: offNode.host,
+          deviceType: offNode.deviceType,
+          hardwareBackend: offNode.hardwareBackend,
+          transportType: offNode.transport,
+          latencyMs: 0.0,
+          capacityMb: offCapMb,
+          assignedModelMb: 0.0,
+          poolShareFraction: totalPoolMb > 0 ? (offCapMb / totalPoolMb).clamp(0.08, 0.5) : 0.2,
+          modelFraction: 0.0,
+          memoryUtilization: 0.0,
+          layerStart: 0,
+          layerEnd: 0,
+          isLocal: false,
+          isOffline: true,
+        ));
+      }
     }
 
     return slices;

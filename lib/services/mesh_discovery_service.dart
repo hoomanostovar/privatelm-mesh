@@ -4,11 +4,14 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' show IconData, Icons;
 import 'package:get/get.dart';
+import 'package:http/http.dart' as http;
 import 'package:llama_flutter_android/llama_flutter_android.dart';
+import '../core/constants.dart';
 import '../models/hardware_acceleration.dart';
 import '../models/transport_type.dart';
 import 'cluster_service.dart';
 import 'device_info_service.dart';
+import 'hive_service.dart';
 import 'inference_service.dart';
 import 'mesh_telemetry_service.dart';
 import 'mesh_distribution_service.dart';
@@ -61,28 +64,26 @@ class MeshNode {
 
   String get endpoint => '$host:$port';
 
+  bool get isOffline => status == 'offline';
+
   IconData get icon {
-    switch (deviceType.toLowerCase()) {
-      case 'pc':
-      case 'windows pc':
-      case 'linux pc':
-        return Icons.desktop_windows_rounded;
-      case 'mac':
-        return Icons.laptop_mac_rounded;
-      case 'tablet':
-      case 'ipad':
-        return Icons.tablet_android_rounded;
-      case 'iphone':
-      case 'phone':
-      case 'android phone':
-      default:
-        return Icons.smartphone_rounded;
+    final lower = deviceType.toLowerCase();
+    if (lower.contains('pc') || lower.contains('desktop') || lower.contains('windows') || lower.contains('linux')) {
+      return Icons.desktop_windows_rounded;
     }
+    if (lower.contains('mac') || lower.contains('laptop')) {
+      return Icons.laptop_mac_rounded;
+    }
+    if (lower.contains('tablet') || lower.contains('ipad') || lower.contains('pad')) {
+      return Icons.tablet_android_rounded;
+    }
+    return Icons.smartphone_rounded;
   }
 
   TransportType get transport => TransportTypeExt.fromString(transportType);
 
   MeshNode copyWith({
+    String? name,
     String? host,
     int? port,
     double? freeRamGB,
@@ -95,7 +96,7 @@ class MeshNode {
   }) =>
       MeshNode(
         id: id,
-        name: name,
+        name: name ?? this.name,
         host: host ?? this.host,
         port: port ?? this.port,
         deviceType: deviceType,
@@ -119,6 +120,7 @@ class MeshNode {
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
+        'host': host,
         'port': port,
         'deviceType': deviceType,
         'gpuName': gpuName,
@@ -135,13 +137,15 @@ class MeshNode {
         'tokensGenerated': tokensGenerated,
         'tokensPerSec': tokensPerSec,
         'wattage': wattage,
+        'lastSeenMs': lastSeen.millisecondsSinceEpoch,
       };
 
   factory MeshNode.fromJson(Map<String, dynamic> json, String remoteAddress) {
+    final savedMs = (json['lastSeenMs'] as num?)?.toInt();
     return MeshNode(
       id: json['id'] as String? ?? remoteAddress,
       name: json['name'] as String? ?? remoteAddress,
-      host: remoteAddress,
+      host: remoteAddress.isNotEmpty ? remoteAddress : (json['host'] as String? ?? ''),
       port: (json['port'] as num?)?.toInt() ?? 50052,
       deviceType: json['deviceType'] as String? ?? 'Device',
       gpuName: json['gpuName'] as String? ?? '',
@@ -158,7 +162,9 @@ class MeshNode {
       tokensGenerated: (json['tokensGenerated'] as num?)?.toInt() ?? 0,
       tokensPerSec: ((json['tokensPerSec'] as num?) ?? 0.0).toDouble(),
       wattage: ((json['wattage'] as num?) ?? 15.0).toDouble(),
-      lastSeen: DateTime.now(),
+      lastSeen: savedMs != null
+          ? DateTime.fromMillisecondsSinceEpoch(savedMs)
+          : DateTime.now(),
     );
   }
 }
@@ -173,20 +179,255 @@ class MeshDiscoveryService extends GetxService {
   static const String magicHeader = 'PLMESH_V1:';
 
   final onlineNodes = <String, MeshNode>{}.obs;
+
+  /// Persistent custom device aliases synced across the entire mesh (nodeId or host -> customName).
+  final deviceAliases = <String, String>{}.obs;
+
+  /// Custom user-assigned name for this local device.
+  final localCustomName = ''.obs;
+
   RawDatagramSocket? _socket;
   Timer? _beaconTimer;
   Timer? _pruneTimer;
   int _beaconTickCount = 0;
 
   String? _localNodeId;
-  String get localNodeId => _localNodeId ??= 'node_${Platform.operatingSystem}_${DateTime.now().millisecondsSinceEpoch % 100000}';
+  String get localNodeId {
+    if (_localNodeId != null) return _localNodeId!;
+    if (Get.isRegistered<HiveService>()) {
+      final hive = Get.find<HiveService>();
+      final savedId = hive.getSetting<String>(AppConstants.keyLocalNodeId);
+      if (savedId != null && savedId.isNotEmpty) {
+        _localNodeId = savedId;
+        return savedId;
+      }
+      final generated = 'node_${Platform.operatingSystem}_${DateTime.now().millisecondsSinceEpoch % 1000000}';
+      hive.setSetting(AppConstants.keyLocalNodeId, generated);
+      _localNodeId = generated;
+      return generated;
+    }
+    return _localNodeId ??= 'node_${Platform.operatingSystem}_${DateTime.now().millisecondsSinceEpoch % 1000000}';
+  }
 
   @override
   void onInit() {
     super.onInit();
+    _loadPersistentMeshRegistry();
     if (!kIsWeb) {
       _startDiscovery();
     }
+  }
+
+  void _loadPersistentMeshRegistry() {
+    if (!Get.isRegistered<HiveService>()) return;
+    final hive = Get.find<HiveService>();
+
+    final savedLocalName = hive.getSetting<String>(AppConstants.keyCustomDeviceName) ?? '';
+    localCustomName.value = savedLocalName;
+
+    final rawAliases = hive.getSetting<Map>(AppConstants.keyMeshDeviceAliases);
+    if (rawAliases != null) {
+      rawAliases.forEach((k, v) {
+        if (k is String && v is String && v.trim().isNotEmpty) {
+          deviceAliases[k] = v.trim();
+        }
+      });
+    }
+
+    if (savedLocalName.isNotEmpty) {
+      deviceAliases[localNodeId] = savedLocalName;
+    }
+
+    // Restore previously known mesh peers in 'offline' state so turned-off or crashed devices
+    // remain identifiable by their custom name until they come back online or are forgotten.
+    final rawKnown = hive.getSetting<List>(AppConstants.keyKnownMeshNodes);
+    if (rawKnown != null) {
+      for (final item in rawKnown) {
+        if (item is Map) {
+          try {
+            final map = Map<String, dynamic>.from(item);
+            final host = map['host'] as String? ?? '';
+            var node = MeshNode.fromJson(map, host).copyWith(status: 'offline');
+            final alias = resolveCustomName(node.id, host: node.host, fallback: node.name);
+            node = node.copyWith(name: alias);
+            if (node.id != localNodeId) {
+              onlineNodes[node.id] = node;
+            }
+          } catch (_) {}
+        }
+      }
+    }
+  }
+
+  Future<void> _saveKnownNodesToHive() async {
+    if (!Get.isRegistered<HiveService>()) return;
+    final hive = Get.find<HiveService>();
+    final list = [
+      for (final n in onlineNodes.values)
+        if (n.id != localNodeId) n.toJson(),
+    ];
+    await hive.setSetting(AppConstants.keyKnownMeshNodes, list);
+  }
+
+  Future<void> _saveAliasesToHive() async {
+    if (!Get.isRegistered<HiveService>()) return;
+    final hive = Get.find<HiveService>();
+    await hive.setSetting(
+      AppConstants.keyMeshDeviceAliases,
+      Map<String, String>.from(deviceAliases),
+    );
+  }
+
+  /// Resolves the user-assigned persistent name for a node ID or host, falling back to hardware name.
+  String resolveCustomName(String nodeId, {String? host, required String fallback}) {
+    if (nodeId == localNodeId || nodeId == 'local') {
+      if (localCustomName.value.trim().isNotEmpty) {
+        return localCustomName.value.trim();
+      }
+    }
+    final byId = deviceAliases[nodeId];
+    if (byId != null && byId.trim().isNotEmpty) return byId.trim();
+    if (host != null && host.isNotEmpty) {
+      final byHost = deviceAliases[host];
+      if (byHost != null && byHost.trim().isNotEmpty) return byHost.trim();
+    }
+    return fallback;
+  }
+
+  /// Renames any device (local or remote peer) and persists + broadcasts the new name across the entire mesh.
+  Future<void> renameDevice({
+    required String nodeId,
+    String? host,
+    required String newName,
+  }) async {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty) return;
+
+    final isLocal = nodeId == 'local' || nodeId == localNodeId;
+    final effectiveId = isLocal ? localNodeId : nodeId;
+
+    deviceAliases[effectiveId] = trimmed;
+    if (host != null && host.isNotEmpty) {
+      deviceAliases[host] = trimmed;
+    }
+
+    if (isLocal) {
+      localCustomName.value = trimmed;
+      if (Get.isRegistered<HiveService>()) {
+        await Get.find<HiveService>().setSetting(AppConstants.keyCustomDeviceName, trimmed);
+      }
+      if (Get.isRegistered<ClusterService>()) {
+        Get.find<ClusterService>().deviceName = trimmed;
+      }
+    } else {
+      final existing = onlineNodes[effectiveId];
+      if (existing != null) {
+        onlineNodes[effectiveId] = existing.copyWith(name: trimmed);
+      }
+      if (Get.isRegistered<ClusterService>()) {
+        final cluster = Get.find<ClusterService>();
+        for (var i = 0; i < cluster.workers.length; i++) {
+          final w = cluster.workers[i];
+          if (w.id == effectiveId || (host != null && w.host == host)) {
+            cluster.workers[i] = ClusterWorker(
+              name: trimmed,
+              host: w.host,
+              port: w.port,
+              ramMb: w.ramMb,
+              bandwidth: w.bandwidth,
+              model: w.model,
+              id: w.id,
+              deviceType: w.deviceType,
+              transportType: w.transportType,
+              hardwareBackend: w.hardwareBackend,
+              latencyMs: w.latencyMs,
+            );
+          }
+        }
+      }
+    }
+
+    await _saveAliasesToHive();
+    await _saveKnownNodesToHive();
+    onlineNodes.refresh();
+
+    // Broadcast updated alias map immediately over UDP
+    unawaited(broadcastPresence());
+
+    // Also push direct HTTP rename notification to all online peers so they persist it immediately
+    for (final peer in onlinePeerNodes) {
+      unawaited(
+        http
+            .post(
+              Uri.parse('http://${peer.host}:50054/api/mesh/rename'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({
+                'target_id': effectiveId,
+                'target_host': host ?? '',
+                'name': trimmed,
+                'aliases': Map<String, String>.from(deviceAliases),
+              }),
+            )
+            .timeout(const Duration(seconds: 2))
+            .catchError((_) => http.Response('', 500)),
+      );
+    }
+  }
+
+  /// Applies a rename or alias map received from another peer on the mesh.
+  Future<void> applyRemoteRename({
+    String? targetId,
+    String? targetHost,
+    String? newName,
+    Map<String, dynamic>? incomingAliases,
+  }) async {
+    var changed = false;
+    if (incomingAliases != null) {
+      incomingAliases.forEach((k, v) {
+        if (v is String && v.trim().isNotEmpty && deviceAliases[k] != v.trim()) {
+          deviceAliases[k] = v.trim();
+          changed = true;
+        }
+      });
+    }
+    if (targetId != null && targetId.isNotEmpty && newName != null && newName.trim().isNotEmpty) {
+      final trimmed = newName.trim();
+      if (deviceAliases[targetId] != trimmed) {
+        deviceAliases[targetId] = trimmed;
+        changed = true;
+      }
+      if (targetHost != null && targetHost.isNotEmpty) {
+        deviceAliases[targetHost] = trimmed;
+      }
+      if (targetId == localNodeId) {
+        localCustomName.value = trimmed;
+        if (Get.isRegistered<HiveService>()) {
+          await Get.find<HiveService>().setSetting(AppConstants.keyCustomDeviceName, trimmed);
+        }
+        if (Get.isRegistered<ClusterService>()) {
+          Get.find<ClusterService>().deviceName = trimmed;
+        }
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      for (final entry in onlineNodes.entries.toList()) {
+        final alias = resolveCustomName(entry.key, host: entry.value.host, fallback: entry.value.name);
+        if (alias != entry.value.name) {
+          onlineNodes[entry.key] = entry.value.copyWith(name: alias);
+        }
+      }
+      await _saveAliasesToHive();
+      await _saveKnownNodesToHive();
+      onlineNodes.refresh();
+    }
+  }
+
+  /// Permanently removes an offline node from the known mesh registry.
+  Future<void> forgetNode(String nodeId) async {
+    onlineNodes.remove(nodeId);
+    await _saveKnownNodesToHive();
   }
 
   @override
@@ -197,14 +438,29 @@ class MeshDiscoveryService extends GetxService {
     super.onClose();
   }
 
-  /// Total online nodes excluding local host.
-  List<MeshNode> get peerNodes => onlineNodes.values.where((n) => n.id != localNodeId).toList();
+  /// All known peer nodes (online first, followed by offline/crashed nodes).
+  List<MeshNode> get peerNodes {
+    final list = onlineNodes.values.where((n) => n.id != localNodeId).toList();
+    list.sort((a, b) {
+      if (a.isOffline != b.isOffline) return a.isOffline ? 1 : -1;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+    return list;
+  }
+
+  /// Currently online & reachable peer nodes.
+  List<MeshNode> get onlinePeerNodes =>
+      peerNodes.where((n) => !n.isOffline).toList();
+
+  /// Known peer nodes that went offline or crashed.
+  List<MeshNode> get offlinePeerNodes =>
+      peerNodes.where((n) => n.isOffline).toList();
 
   /// Total pooled cluster VRAM (GB) across all live mesh devices.
   double get totalMeshVramGB {
     final dev = Get.isRegistered<DeviceInfoService>() ? Get.find<DeviceInfoService>() : null;
     final localVram = dev?.gpuVramGB.value ?? 0.0;
-    final remoteVram = peerNodes.fold<double>(0.0, (sum, n) => sum + n.gpuVramGB);
+    final remoteVram = onlinePeerNodes.fold<double>(0.0, (sum, n) => sum + n.gpuVramGB);
     return localVram + remoteVram;
   }
 
@@ -212,14 +468,14 @@ class MeshDiscoveryService extends GetxService {
   double get totalMeshFreeRamGB {
     final dev = Get.isRegistered<DeviceInfoService>() ? Get.find<DeviceInfoService>() : null;
     final localFree = dev?.availableRamGB.value ?? 4.0;
-    final remoteFree = peerNodes.fold<double>(0.0, (sum, n) => sum + n.freeRamGB);
+    final remoteFree = onlinePeerNodes.fold<double>(0.0, (sum, n) => sum + n.freeRamGB);
     return localFree + remoteFree;
   }
 
   /// Evaluates what class of models can be run across the current mesh topology.
   String get meshModelRecommendation {
     final totalPool = totalMeshFreeRamGB;
-    final count = peerNodes.length + 1;
+    final count = onlinePeerNodes.length + 1;
 
     if (totalPool >= 45.0) {
       return '🚀 Elite Mesh ($count devices · ${totalPool.toStringAsFixed(1)} GB Pool): Can run 70B MoE (Llama-3 70B, Qwen 72B)';
@@ -264,12 +520,28 @@ class MeshDiscoveryService extends GetxService {
       );
       unawaited(broadcastPresence(forceUnicastSweep: true));
 
-      // Prune inactive nodes (timeout after 20 seconds of no heartbeats)
-      _pruneTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      // Mark inactive nodes as 'offline' (after 16s of no heartbeats) rather than
+      // erasing them, so turned-off or crashed devices remain identifiable by their
+      // persistent custom name!
+      _pruneTimer = Timer.periodic(const Duration(seconds: 4), (_) {
         final now = DateTime.now();
-        onlineNodes.removeWhere((id, node) {
-          return id != localNodeId && now.difference(node.lastSeen).inSeconds > 20;
-        });
+        var changed = false;
+        for (final entry in onlineNodes.entries.toList()) {
+          if (entry.key == localNodeId) continue;
+          final node = entry.value;
+          if (!node.isOffline && now.difference(node.lastSeen).inSeconds > 16) {
+            onlineNodes[entry.key] = node.copyWith(
+              status: 'offline',
+              tokensPerSec: 0.0,
+              wattage: 0.0,
+            );
+            changed = true;
+          }
+        }
+        if (changed) {
+          onlineNodes.refresh();
+          unawaited(_saveKnownNodesToHive());
+        }
       });
     } catch (e) {
       print('[MeshDiscovery] Failed to bind UDP socket: $e');
@@ -308,6 +580,12 @@ class MeshDiscoveryService extends GetxService {
     return ips.toList();
   }
 
+  String get localDisplayName {
+    final dev = Get.isRegistered<DeviceInfoService>() ? Get.find<DeviceInfoService>() : null;
+    final defaultName = '${Platform.localHostname} (${dev?.deviceNoun ?? "Node"})';
+    return resolveCustomName(localNodeId, fallback: defaultName);
+  }
+
   Map<String, dynamic> _buildBeaconMap({bool isReply = false}) {
     final dev = Get.isRegistered<DeviceInfoService>() ? Get.find<DeviceInfoService>() : null;
     final inf = Get.isRegistered<InferenceService>() ? Get.find<InferenceService>() : null;
@@ -323,7 +601,7 @@ class MeshDiscoveryService extends GetxService {
 
     return {
       'id': localNodeId,
-      'name': '${Platform.localHostname} (${dev?.deviceNoun ?? "Node"})',
+      'name': localDisplayName,
       'port': 50052,
       'deviceType': deviceType,
       'gpuName': gpuName,
@@ -339,6 +617,7 @@ class MeshDiscoveryService extends GetxService {
       'tokensGenerated': telem?.localTokensGenerated.value ?? 0,
       'tokensPerSec': telem?.localTokensPerSecond.value ?? 0.0,
       'wattage': telem?.localWattage.value ?? 15.0,
+      if (deviceAliases.isNotEmpty) 'aliases': Map<String, String>.from(deviceAliases),
       if (isReply) 'isReply': true,
     };
   }
@@ -420,12 +699,28 @@ class MeshDiscoveryService extends GetxService {
       final json = jsonDecode(jsonStr) as Map<String, dynamic>;
       final remoteIp = dg.address.address;
 
-      final node = MeshNode.fromJson(json, remoteIp);
+      var node = MeshNode.fromJson(json, remoteIp);
       // Ignore our own loopback UDP broadcast packets so local telemetry is never double-counted
       if (node.id == localNodeId) return;
 
-      final isFirstSeen = !onlineNodes.containsKey(node.id);
+      // Merge any mesh-wide custom device aliases carried in the beacon
+      if (json['aliases'] is Map) {
+        unawaited(applyRemoteRename(
+          incomingAliases: Map<String, dynamic>.from(json['aliases'] as Map),
+        ));
+      }
+
+      // Resolve persistent custom name if set for this node
+      final resolvedName = resolveCustomName(node.id, host: node.host, fallback: node.name);
+      node = node.copyWith(name: resolvedName);
+
+      final prev = onlineNodes[node.id];
+      final isFirstSeen = prev == null || prev.isOffline;
       onlineNodes[node.id] = node;
+
+      if (isFirstSeen || prev.name != node.name) {
+        unawaited(_saveKnownNodesToHive());
+      }
 
       if (Get.isRegistered<ClusterService>()) {
         unawaited(Get.find<ClusterService>().syncDiscoveredPeer(node));

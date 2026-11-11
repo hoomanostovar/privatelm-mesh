@@ -4,13 +4,14 @@ import 'package:get/get.dart';
 
 import '../controllers/model_controller.dart';
 import '../core/haptics.dart';
+import '../core/ui.dart';
 import '../models/ai_model.dart';
 import '../models/transport_type.dart';
 import '../services/cluster_service.dart';
 import '../services/inference_service.dart';
 import '../services/mesh_discovery_service.dart';
 
-/// Preset model profile used for interactive allocation previewing in the Sci-Fi Mesh Visualizer.
+/// Preset model profile used for interactive allocation previewing in the Mesh Visualizer.
 class MeshModelPreviewOption {
   final String id;
   final String name;
@@ -31,16 +32,120 @@ class MeshModelPreviewOption {
   String get sizeLabel => '${(sizeMb / 1024).toStringAsFixed(1)} GB';
 }
 
-/// Sci-Fi Game HUD Visualizer for Mesh Memory Pooling & Model Layer Allocation.
+/// Device category used to draw the appropriate silhouette frame (PC Monitor, Tablet, Phone).
+enum MeshDeviceSilhouetteType {
+  pc,
+  tablet,
+  phone,
+}
+
+MeshDeviceSilhouetteType classifySilhouetteType(String deviceType, String name) {
+  final combined = '${deviceType.toLowerCase()} ${name.toLowerCase()}';
+  if (combined.contains('tablet') || combined.contains('ipad') || combined.contains('pad') || combined.contains('tab')) {
+    return MeshDeviceSilhouetteType.tablet;
+  }
+  if (combined.contains('pc') ||
+      combined.contains('desktop') ||
+      combined.contains('windows') ||
+      combined.contains('mac') ||
+      combined.contains('linux') ||
+      combined.contains('laptop')) {
+    return MeshDeviceSilhouetteType.pc;
+  }
+  return MeshDeviceSilhouetteType.phone;
+}
+
+/// Shows a dialog to rename any mesh device (local or remote, online or offline)
+/// and persists + syncs that name across all nodes on the mesh.
+Future<void> showMeshDeviceRenameDialog({
+  required BuildContext context,
+  required MeshDiscoveryService discovery,
+  required String nodeId,
+  required String currentName,
+  String? host,
+}) async {
+  final controller = TextEditingController(text: currentName);
+  final result = await showAppSheet<String>(
+    context,
+    title: 'Rename Mesh Device',
+    subtitle: 'This custom name is saved persistently across the mesh so you can immediately identify this device even if it turns off or crashes.',
+    builder: (ctx) {
+      final t = AppTokens.of(ctx);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: controller,
+            autofocus: true,
+            style: t.bodyStrong,
+            decoration: InputDecoration(
+              labelText: 'Device Name (e.g. Samsung S24 Kitchen, Gaming PC, iPad)',
+              hintText: 'Enter a clear name for this device',
+              filled: true,
+              fillColor: t.surface,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide(color: t.hairline),
+              ),
+            ),
+            onSubmitted: (val) => Navigator.pop(ctx, val.trim()),
+          ),
+          if (host != null && host.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Node ID: $nodeId  ·  Address: $host',
+              style: t.caption.copyWith(color: t.muted),
+            ),
+          ],
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: TonalButton.neutral(
+                  ctx,
+                  label: 'Cancel',
+                  onTap: () => Navigator.pop(ctx),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: PrimaryButton(
+                  label: 'Save Name Across Mesh',
+                  icon: Icons.check_rounded,
+                  onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+                ),
+              ),
+            ],
+          ),
+        ],
+      );
+    },
+  );
+
+  if (result != null && result.isNotEmpty && result != currentName) {
+    await discovery.renameDevice(
+      nodeId: nodeId,
+      host: host,
+      newName: result,
+    );
+    showToast(
+      'Device Renamed',
+      'Renamed to "$result" and synced across the mesh.',
+      tone: ToastTone.success,
+    );
+  }
+}
+
+/// Device Silhouette & Layer Stack Pipeline Visualizer.
 ///
-/// Shows:
-/// 1. Interactive model selector (loaded model, downloaded GGUF models, and size presets)
-///    that animates the allocation transitions smoothly when switching models.
-/// 2. Proportional Multi-Node Reactor Bar where each device's width is proportional to its
-///    share of the total mesh memory pool, and the inner glowing energy bar animates how much
-///    of the selected model fits inside that device.
-/// 3. Per-device Tactical Core Cards showing exact GB used vs. capacity, % of model, and
-///    assigned transformer layer range (e.g. L00–L22).
+/// Renders each device in the mesh using its true form-factor silhouette:
+/// - **PC / Mac / Linux**: Widescreen monitor frame with display stand & base
+/// - **Tablet / iPad**: Wide-aspect rounded tablet frame with top camera dot
+/// - **Phone**: Vertical smartphone frame with top earpiece slot
+///
+/// Inside each device silhouette, horizontal layer bars (`[════════]`) stack from top to bottom
+/// showing how many transformer layers of the selected model fit in that device, connected
+/// by directional pipeline arrows (`→`) between devices.
 class MeshAllocationVisualizer extends StatefulWidget {
   final ClusterService cluster;
   final MeshDiscoveryService discovery;
@@ -99,12 +204,12 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
   ];
 
   static const List<Color> _nodePalette = [
-    Color(0xFF00F0FF), // Cyber Cyan (Local Primary)
-    Color(0xFF10B981), // Matrix Emerald
-    Color(0xFFA855F7), // Plasma Violet
-    Color(0xFFF59E0B), // Solar Amber
-    Color(0xFFEC4899), // Neon Magenta
-    Color(0xFF3B82F6), // Ion Blue
+    Color(0xFF00F0FF), // Cyber Cyan (Node 1)
+    Color(0xFF10B981), // Matrix Emerald (Node 2)
+    Color(0xFFA855F7), // Plasma Violet (Node 3)
+    Color(0xFFF59E0B), // Solar Amber (Node 4)
+    Color(0xFFEC4899), // Neon Magenta (Node 5)
+    Color(0xFF3B82F6), // Ion Blue (Node 6)
   ];
 
   @override
@@ -112,7 +217,7 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
     super.initState();
     _pulseController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2400),
+      duration: const Duration(milliseconds: 2200),
     )..repeat(reverse: true);
   }
 
@@ -196,53 +301,90 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
     );
 
     if (baseSlices.length == 1 && _simulatePeerWhenSolo) {
-      // Synthesize a realistic 2-node heterogeneous mesh preview when user toggles simulation on a solo PC
+      // Synthesize a realistic 4-device heterogeneous mesh (PC + Tablet + 2 Phones)
+      // matching the multi-device layer pipeline diagram!
       final local = baseSlices.first;
-      const peerCapMb = 6144.0; // 6 GB peer node
-      final totalPool = local.capacityMb + peerCapMb;
-      final needMb = selected.sizeMb * 1.1;
-      final localAssigned = math.min(local.capacityMb, needMb);
-      final peerAssigned = math.max(0.0, math.min(peerCapMb, needMb - localAssigned));
-      final totalAssigned = math.max(1.0, localAssigned + peerAssigned);
-
-      final localLayers = localAssigned > 0
-          ? math.max(1, ((localAssigned / totalAssigned) * selected.layers).round())
-          : 0;
-
-      return [
-        MeshDeviceSlice(
+      final simCapacities = <({String id, String name, String type, String hw, double capMb, TransportType trans, double lat})>[
+        (
           id: local.id,
           name: local.name,
-          deviceType: local.deviceType,
-          hardwareBackend: local.hardwareBackend,
-          transportType: local.transportType,
-          latencyMs: 0.0,
-          capacityMb: local.capacityMb,
-          assignedModelMb: localAssigned,
-          poolShareFraction: local.capacityMb / totalPool,
-          modelFraction: needMb > 0 ? (localAssigned / needMb).clamp(0.0, 1.0) : 0.0,
-          memoryUtilization: (localAssigned / local.capacityMb).clamp(0.0, 1.0),
-          layerStart: 0,
-          layerEnd: localLayers,
-          isLocal: true,
+          type: local.deviceType,
+          hw: local.hardwareBackend,
+          capMb: local.capacityMb,
+          trans: local.transportType,
+          lat: 0.0,
         ),
-        MeshDeviceSlice(
-          id: 'sim_peer_1',
-          name: 'Simulated Mesh Peer (6 GB Node)',
-          deviceType: 'Phone',
-          hardwareBackend: 'Vulkan GPU · Snapdragon',
-          transportType: TransportType.wifi,
-          latencyMs: 4.2,
-          capacityMb: peerCapMb,
-          assignedModelMb: peerAssigned,
-          poolShareFraction: peerCapMb / totalPool,
-          modelFraction: needMb > 0 ? (peerAssigned / needMb).clamp(0.0, 1.0) : 0.0,
-          memoryUtilization: (peerAssigned / peerCapMb).clamp(0.0, 1.0),
-          layerStart: localLayers,
-          layerEnd: peerAssigned > 0 ? selected.layers : localLayers,
-          isLocal: false,
+        (
+          id: 'sim_tablet',
+          name: widget.discovery.resolveCustomName('sim_tablet', fallback: 'iPad Pro Tablet'),
+          type: 'Tablet',
+          hw: 'Metal GPU · M2',
+          capMb: 6144.0,
+          trans: TransportType.wifi,
+          lat: 2.8,
+        ),
+        (
+          id: 'sim_phone_samsung',
+          name: widget.discovery.resolveCustomName('sim_phone_samsung', fallback: 'Samsung Galaxy S24'),
+          type: 'Phone',
+          hw: 'Vulkan · Snapdragon',
+          capMb: 4608.0,
+          trans: TransportType.usb,
+          lat: 1.4,
+        ),
+        (
+          id: 'sim_phone_pixel',
+          name: widget.discovery.resolveCustomName('sim_phone_pixel', fallback: 'Pixel 8 Phone'),
+          type: 'Phone',
+          hw: 'Vulkan · Tensor G3',
+          capMb: 3584.0,
+          trans: TransportType.wifi,
+          lat: 4.5,
         ),
       ];
+
+      final totalPool = simCapacities.fold<double>(0, (s, n) => s + n.capMb);
+      final needMb = selected.sizeMb * 1.1;
+      var leftMb = needMb;
+      final assignedList = <double>[];
+      for (final n in simCapacities) {
+        final a = math.max(0.0, math.min(n.capMb, leftMb));
+        assignedList.add(a);
+        leftMb -= a;
+      }
+      final totalAssigned = math.max(1.0, assignedList.fold<double>(0, (s, a) => s + a));
+
+      var curLayer = 0;
+      final result = <MeshDeviceSlice>[];
+      for (var i = 0; i < simCapacities.length; i++) {
+        final n = simCapacities[i];
+        final assigned = assignedList[i];
+        final lCount = assigned > 0
+            ? math.max(1, ((assigned / totalAssigned) * selected.layers).round())
+            : 0;
+        final startL = curLayer;
+        final endL = assigned > 0 ? math.min(selected.layers, startL + lCount) : startL;
+        curLayer = endL;
+
+        result.add(MeshDeviceSlice(
+          id: n.id,
+          name: n.name,
+          deviceType: n.type,
+          hardwareBackend: n.hw,
+          transportType: n.trans,
+          latencyMs: n.lat,
+          capacityMb: n.capMb,
+          assignedModelMb: assigned,
+          poolShareFraction: n.capMb / totalPool,
+          modelFraction: needMb > 0 ? (assigned / needMb).clamp(0.0, 1.0) : 0.0,
+          memoryUtilization: (assigned / n.capMb).clamp(0.0, 1.0),
+          layerStart: startL,
+          layerEnd: endL,
+          isLocal: i == 0,
+          isOffline: false,
+        ));
+      }
+      return result;
     }
 
     return baseSlices;
@@ -251,11 +393,13 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      // Touch reactive dependencies so visualizer updates live when nodes join/leave or models load
+      // Touch reactive observables so UI updates on node join/leave/rename or model switch
       widget.cluster.workers.length;
       widget.cluster.enabled.value;
       widget.cluster.schedulerStrategy.value;
       widget.discovery.onlineNodes.length;
+      widget.discovery.deviceAliases.length;
+      widget.discovery.localCustomName.value;
 
       final options = _buildOptions();
       final activeOption = options.firstWhere(
@@ -267,9 +411,11 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
       );
 
       final slices = _computeSlices(activeOption);
-      final totalPoolMb = slices.fold<double>(0, (s, d) => s + d.capacityMb);
+      final onlineSlices = slices.where((s) => !s.isOffline).toList();
+      final offlineSlices = slices.where((s) => s.isOffline).toList();
+      final totalPoolMb = onlineSlices.fold<double>(0, (s, d) => s + d.capacityMb);
       final needMb = activeOption.sizeMb * 1.1; // Model + 10% KV cache
-      final totalAssignedMb = slices.fold<double>(0, (s, d) => s + d.assignedModelMb);
+      final totalAssignedMb = onlineSlices.fold<double>(0, (s, d) => s + d.assignedModelMb);
       final fitsInMesh = needMb <= totalPoolMb + 1.0;
       final fitPercentage = needMb > 0 ? ((totalAssignedMb / needMb) * 100).clamp(0.0, 100.0) : 100.0;
 
@@ -279,16 +425,18 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [
-              Color(0xFF090D16),
+              Color(0xFF0A0F1D),
               Color(0xFF0F172A),
               Color(0xFF0B1120),
             ],
           ),
           borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: fitsInMesh
-                ? const Color(0xFF00F0FF).withValues(alpha: 0.32)
-                : _dangerColor.withValues(alpha: 0.55),
+            color: offlineSlices.isNotEmpty
+                ? const Color(0xFFF59E0B).withValues(alpha: 0.65)
+                : (fitsInMesh
+                    ? const Color(0xFF00F0FF).withValues(alpha: 0.32)
+                    : _dangerColor.withValues(alpha: 0.55)),
             width: 1.2,
           ),
           boxShadow: [
@@ -304,7 +452,6 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
           borderRadius: BorderRadius.circular(18),
           child: Stack(
             children: [
-              // Subtle sci-fi tactical grid background
               Positioned.fill(
                 child: CustomPaint(
                   painter: _SciFiHudGridPainter(
@@ -319,23 +466,32 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
                   children: [
                     _buildHudHeader(
                       activeOption: activeOption,
-                      slices: slices,
+                      onlineSlices: onlineSlices,
+                      offlineSlices: offlineSlices,
                       totalPoolMb: totalPoolMb,
                       needMb: needMb,
                       fitsInMesh: fitsInMesh,
                       fitPercentage: fitPercentage,
                     ),
+                    if (offlineSlices.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      _buildOfflineAlertBanner(context, offlineSlices),
+                    ],
                     const SizedBox(height: 14),
                     _buildModelSelectorStrip(options, activeOption),
-                    const SizedBox(height: 16),
-                    _buildProportionalReactorBar(
+                    const SizedBox(height: 18),
+                    _buildDeviceSilhouettePipeline(
+                      context: context,
                       slices: slices,
+                      totalLayers: activeOption.layers,
+                    ),
+                    const SizedBox(height: 14),
+                    _buildProportionalPoolLegend(
+                      slices: onlineSlices,
                       totalPoolMb: totalPoolMb,
                       needMb: needMb,
                       fitsInMesh: fitsInMesh,
                     ),
-                    const SizedBox(height: 16),
-                    _buildDeviceSliceCards(slices, activeOption, needMb),
                   ],
                 ),
               ),
@@ -346,15 +502,44 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
     });
   }
 
+  Widget _buildOfflineAlertBanner(BuildContext context, List<MeshDeviceSlice> offlineSlices) {
+    final names = offlineSlices.map((s) => '${s.name} (${s.deviceType})').join(', ');
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: _dangerColor.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _dangerColor.withValues(alpha: 0.55)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded, color: _dangerColor, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'OFFLINE / UNREACHABLE DEVICE: $names — Check power or Wi-Fi on that device.',
+              style: const TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFFFCA5A5),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildHudHeader({
     required MeshModelPreviewOption activeOption,
-    required List<MeshDeviceSlice> slices,
+    required List<MeshDeviceSlice> onlineSlices,
+    required List<MeshDeviceSlice> offlineSlices,
     required double totalPoolMb,
     required double needMb,
     required bool fitsInMesh,
     required double fitPercentage,
   }) {
-    final realNodeCount = widget.cluster.workers.length + 1;
+    final realNodeCount = widget.discovery.peerNodes.length + 1;
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -374,17 +559,11 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
                   color: statusColor.withValues(alpha: glow),
                   width: 1.4,
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: statusColor.withValues(alpha: glow * 0.4),
-                    blurRadius: 12,
-                  ),
-                ],
               ),
               child: Icon(
-                fitsInMesh ? Icons.blur_on_rounded : Icons.warning_amber_rounded,
+                fitsInMesh ? Icons.devices_other_rounded : Icons.warning_amber_rounded,
                 color: statusColor,
-                size: 22,
+                size: 21,
               ),
             );
           },
@@ -394,19 +573,21 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   const Text(
-                    'NEURAL MESH ALLOCATION CORE',
+                    'MESH DEVICE LAYER PIPELINE',
                     style: TextStyle(
                       fontFamily: _fontMono,
                       fontSize: 11,
                       fontWeight: FontWeight.w800,
-                      letterSpacing: 1.4,
+                      letterSpacing: 1.2,
                       color: Color(0xFF00F0FF),
                     ),
                   ),
-                  const SizedBox(width: 8),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
@@ -439,8 +620,8 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
                 curve: Curves.easeOutCubic,
                 builder: (context, animatedNeedGb, _) {
                   return Text(
-                    'Model Footprint: ${animatedNeedGb.toStringAsFixed(1)} GB (incl. KV)  ·  '
-                    'Total Mesh Pool: ${(totalPoolMb / 1024).toStringAsFixed(1)} GB across ${slices.length} ${slices.length == 1 ? "Node" : "Nodes"}',
+                    'Model: ${animatedNeedGb.toStringAsFixed(1)} GB (${activeOption.layers} Layers)  ·  '
+                    'Pool: ${(totalPoolMb / 1024).toStringAsFixed(1)} GB (${onlineSlices.length} Online${offlineSlices.isNotEmpty ? ", ${offlineSlices.length} Offline" : ""})',
                     style: const TextStyle(
                       fontSize: 12,
                       color: Color(0xFF94A3B8),
@@ -454,7 +635,7 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
         ),
         if (realNodeCount == 1)
           Tooltip(
-            message: 'Preview how models split across multiple devices when a second node joins',
+            message: 'Preview PC + Tablet + Phones layer pipeline when solo',
             child: InkWell(
               borderRadius: BorderRadius.circular(8),
               onTap: () {
@@ -486,7 +667,7 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
                     ),
                     const SizedBox(width: 5),
                     Text(
-                      _simulatePeerWhenSolo ? 'Simulating +1 Peer' : 'Simulate +1 Peer',
+                      _simulatePeerWhenSolo ? 'Preview: 4 Devices' : 'Preview Multi-Device',
                       style: TextStyle(
                         fontFamily: _fontMono,
                         fontSize: 10,
@@ -513,7 +694,7 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'SELECT MODEL TO ANIMATE MESH MEMORY DISTRIBUTION:',
+          'SELECT MODEL TO ANIMATE LAYER STACK ACROSS DEVICES:',
           style: TextStyle(
             fontFamily: _fontMono,
             fontSize: 10,
@@ -561,14 +742,6 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
                 : Colors.white.withValues(alpha: 0.10),
             width: isSelected ? 1.3 : 1.0,
           ),
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: cyan.withValues(alpha: 0.22),
-                    blurRadius: 10,
-                  ),
-                ]
-              : null,
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -606,15 +779,289 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
     );
   }
 
-  /// Proportional Multi-Node Reactor Bar:
-  /// Each device's horizontal chamber is sized proportionally to its memory capacity (`poolShareFraction`),
-  /// and its internal animated fill shows how much of that device's memory is occupied by the model.
-  Widget _buildProportionalReactorBar({
+  /// Renders the horizontal row of Device Silhouettes (PC, Tablet, Phone)
+  /// with stacked horizontal layer bars inside each device and directional arrows (`→`)
+  /// connecting each device in the pipeline — matching the reference diagram!
+  Widget _buildDeviceSilhouettePipeline({
+    required BuildContext context,
+    required List<MeshDeviceSlice> slices,
+    required int totalLayers,
+  }) {
+    final maxCapMb = slices.fold<double>(1024.0, (m, s) => math.max(m, s.capacityMb));
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF060A14),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            for (var i = 0; i < slices.length; i++) ...[
+              if (i > 0)
+                _buildPipelineArrow(
+                  active: !slices[i].isOffline && slices[i].assignedModelMb > 0,
+                  isOffline: slices[i].isOffline,
+                  color: _nodePalette[i % _nodePalette.length],
+                ),
+              _buildSingleDeviceSilhouetteColumn(
+                context: context,
+                slice: slices[i],
+                index: i,
+                maxCapacityMb: maxCapMb,
+                totalLayers: totalLayers,
+                color: slices[i].isOffline
+                    ? _dangerColor
+                    : _nodePalette[i % _nodePalette.length],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPipelineArrow({
+    required bool active,
+    required bool isOffline,
+    required Color color,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isOffline ? Icons.link_off_rounded : Icons.arrow_forward_rounded,
+            size: 22,
+            color: isOffline
+                ? _dangerColor.withValues(alpha: 0.85)
+                : (active ? color : Colors.white.withValues(alpha: 0.22)),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            isOffline ? 'OFFLINE' : (active ? 'RPC' : 'IDLE'),
+            style: TextStyle(
+              fontFamily: _fontMono,
+              fontSize: 8.5,
+              fontWeight: FontWeight.w700,
+              color: isOffline
+                  ? _dangerColor
+                  : (active ? color : const Color(0xFF64748B)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSingleDeviceSilhouetteColumn({
+    required BuildContext context,
+    required MeshDeviceSlice slice,
+    required int index,
+    required double maxCapacityMb,
+    required int totalLayers,
+    required Color color,
+  }) {
+    final silhouetteType = classifySilhouetteType(slice.deviceType, slice.name);
+
+    // Width & height tailored per device symbol (PC monitor vs Tablet vs Phone)
+    final double frameWidth = switch (silhouetteType) {
+      MeshDeviceSilhouetteType.pc => 152.0,
+      MeshDeviceSilhouetteType.tablet => 132.0,
+      MeshDeviceSilhouetteType.phone => 112.0,
+    };
+    const double frameHeight = 204.0;
+
+    // Total layer capacity slots inside this device's screen proportional to its memory capacity
+    final int maxSlots = (6 + ((slice.capacityMb / maxCapacityMb) * 8).round()).clamp(6, 14);
+
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(
+        begin: 0.0,
+        end: slice.isOffline ? 0.0 : slice.memoryUtilization.clamp(0.0, 1.0),
+      ),
+      duration: const Duration(milliseconds: 650),
+      curve: Curves.easeOutCubic,
+      builder: (context, animatedFill, _) {
+        final filledSlots = slice.assignedModelMb > 0
+            ? math.max(1, (animatedFill * maxSlots).round())
+            : 0;
+        final modelPct = (slice.modelFraction * 100).round();
+
+        return SizedBox(
+          width: frameWidth + 14,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Top badge: Device Type Symbol + Editable Persistent Name
+              InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => showMeshDeviceRenameDialog(
+                  context: context,
+                  discovery: widget.discovery,
+                  nodeId: slice.id,
+                  currentName: slice.name,
+                  host: slice.host,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        switch (silhouetteType) {
+                          MeshDeviceSilhouetteType.pc => Icons.desktop_windows_rounded,
+                          MeshDeviceSilhouetteType.tablet => Icons.tablet_mac_rounded,
+                          MeshDeviceSilhouetteType.phone => Icons.smartphone_rounded,
+                        },
+                        size: 13,
+                        color: color,
+                      ),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          slice.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            color: slice.isOffline ? const Color(0xFFFCA5A5) : Colors.white,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 3),
+                      Icon(
+                        Icons.edit_rounded,
+                        size: 11,
+                        color: Colors.white.withValues(alpha: 0.45),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Text(
+                slice.isOffline
+                    ? 'OFFLINE · ${slice.host ?? "Unreachable"}'
+                    : '${slice.deviceType.toUpperCase()} · ${(slice.capacityMb / 1024).toStringAsFixed(1)} GB Pool',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontFamily: _fontMono,
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w600,
+                  color: slice.isOffline ? _dangerColor : const Color(0xFF94A3B8),
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // Device Silhouette Frame (Phone / Tablet / PC Monitor) with Stacked Layer Bars
+              SizedBox(
+                width: frameWidth,
+                height: frameHeight,
+                child: AnimatedBuilder(
+                  animation: _pulseController,
+                  builder: (context, _) {
+                    return CustomPaint(
+                      painter: _DeviceSilhouetteLayerStackPainter(
+                        silhouetteType: silhouetteType,
+                        totalSlots: maxSlots,
+                        filledSlots: filledSlots,
+                        fillFraction: animatedFill,
+                        color: color,
+                        pulse: _pulseController.value,
+                        isOffline: slice.isOffline,
+                      ),
+                      child: slice.isOffline
+                          ? Center(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.78),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: _dangerColor),
+                                ),
+                                child: const Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.power_off_rounded, color: _dangerColor, size: 22),
+                                    SizedBox(height: 4),
+                                    Text(
+                                      'OFFLINE',
+                                      style: TextStyle(
+                                        fontFamily: _fontMono,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w800,
+                                        color: _dangerColor,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          : null,
+                    );
+                  },
+                ),
+              ),
+
+              const SizedBox(height: 8),
+              // Bottom Layer & Memory Allocation Readout
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: color.withValues(alpha: 0.38)),
+                ),
+                child: Text(
+                  slice.isOffline
+                      ? 'TURNED OFF / CRASHED'
+                      : (slice.assignedModelMb > 0
+                          ? '$modelPct% Model · ${(slice.assignedModelMb / 1024).toStringAsFixed(1)} GB'
+                          : '0% · Standby Reserve'),
+                  style: TextStyle(
+                    fontFamily: _fontMono,
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w700,
+                    color: slice.isOffline ? _dangerColor : color,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                slice.isOffline
+                    ? 'Tap name above to rename'
+                    : (slice.assignedModelMb > 0
+                        ? 'Layers L${slice.layerStart.toString().padLeft(2, '0')}–L${slice.layerEnd.toString().padLeft(2, '0')} ($filledSlots/$maxSlots Slots)'
+                        : 'No layers assigned'),
+                style: const TextStyle(
+                  fontFamily: _fontMono,
+                  fontSize: 9,
+                  color: Color(0xFF94A3B8),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Compact proportional pool summary bar below the silhouette pipeline.
+  Widget _buildProportionalPoolLegend({
     required List<MeshDeviceSlice> slices,
     required double totalPoolMb,
     required double needMb,
     required bool fitsInMesh,
   }) {
+    if (slices.isEmpty) return const SizedBox.shrink();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -622,339 +1069,245 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             const Text(
-              'PROPORTIONAL DEVICE MEMORY CHAMBERS & MODEL LOAD',
+              'PROPORTIONAL MEMORY POOL SHARE  ·  TAP ANY DEVICE NAME ABOVE TO RENAME',
               style: TextStyle(
                 fontFamily: _fontMono,
-                fontSize: 10,
+                fontSize: 9.5,
                 fontWeight: FontWeight.w700,
-                letterSpacing: 0.9,
+                letterSpacing: 0.6,
                 color: Color(0xFF94A3B8),
               ),
             ),
             Text(
-              '${((needMb / math.max(1.0, totalPoolMb)) * 100).clamp(0.0, 999.0).toStringAsFixed(0)}% Pool Load',
+              '${((needMb / math.max(1.0, totalPoolMb)) * 100).clamp(0.0, 999.0).toStringAsFixed(0)}% Pool Used',
               style: TextStyle(
                 fontFamily: _fontMono,
-                fontSize: 10.5,
+                fontSize: 10,
                 fontWeight: FontWeight.w700,
                 color: fitsInMesh ? const Color(0xFF00F0FF) : _dangerColor,
               ),
             ),
           ],
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         Container(
-          height: 54,
-          padding: const EdgeInsets.all(4),
+          height: 16,
+          padding: const EdgeInsets.all(2),
           decoration: BoxDecoration(
             color: const Color(0xFF050811),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.12),
-            ),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
           ),
           child: Row(
             children: [
               for (var i = 0; i < slices.length; i++) ...[
-                if (i > 0) const SizedBox(width: 4),
+                if (i > 0) const SizedBox(width: 3),
                 Expanded(
                   flex: math.max(8, (slices[i].poolShareFraction * 1000).round()),
-                  child: _buildChamberSegment(
-                    slice: slices[i],
-                    color: _nodePalette[i % _nodePalette.length],
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildChamberSegment({
-    required MeshDeviceSlice slice,
-    required Color color,
-  }) {
-    return TweenAnimationBuilder<double>(
-      tween: Tween<double>(begin: 0.0, end: slice.memoryUtilization.clamp(0.0, 1.0)),
-      duration: const Duration(milliseconds: 650),
-      curve: Curves.easeOutCubic,
-      builder: (context, animatedFill, _) {
-        final pctPool = (slice.poolShareFraction * 100).round();
-        final pctUsed = (animatedFill * 100).round();
-
-        return Container(
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.07),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: color.withValues(alpha: slice.assignedModelMb > 0 ? 0.55 : 0.20),
-              width: 1.0,
-            ),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(7),
-            child: Stack(
-              children: [
-                // Animated Sci-Fi scanline fill proportional to how full this device's RAM is
-                FractionallySizedBox(
-                  alignment: Alignment.centerLeft,
-                  widthFactor: animatedFill,
-                  heightFactor: 1.0,
-                  child: AnimatedBuilder(
-                    animation: _pulseController,
-                    builder: (context, _) {
-                      return CustomPaint(
-                        painter: _SciFiCoreFillPainter(
-                          color: color,
-                          pulse: _pulseController.value,
+                  child: TweenAnimationBuilder<double>(
+                    tween: Tween<double>(
+                      begin: 0.0,
+                      end: slices[i].memoryUtilization.clamp(0.0, 1.0),
+                    ),
+                    duration: const Duration(milliseconds: 600),
+                    curve: Curves.easeOutCubic,
+                    builder: (context, fill, _) {
+                      final c = _nodePalette[i % _nodePalette.length];
+                      return Container(
+                        decoration: BoxDecoration(
+                          color: c.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        alignment: Alignment.centerLeft,
+                        child: FractionallySizedBox(
+                          widthFactor: fill,
+                          heightFactor: 1.0,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: c,
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                          ),
                         ),
                       );
                     },
                   ),
                 ),
-                // Overlay telemetry text inside chamber
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              slice.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.white,
-                                shadows: [
-                                  Shadow(color: Colors.black, blurRadius: 4),
-                                ],
-                              ),
-                            ),
-                          ),
-                          Text(
-                            '$pctPool% Pool',
-                            style: TextStyle(
-                              fontFamily: _fontMono,
-                              fontSize: 9.5,
-                              fontWeight: FontWeight.w700,
-                              color: color,
-                              shadows: const [
-                                Shadow(color: Colors.black, blurRadius: 4),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        slice.assignedModelMb > 0
-                            ? '${(slice.assignedModelMb / 1024).toStringAsFixed(1)} / ${(slice.capacityMb / 1024).toStringAsFixed(1)} GB ($pctUsed% Full)'
-                            : 'STANDBY · ${(slice.capacityMb / 1024).toStringAsFixed(1)} GB Free',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontFamily: _fontMono,
-                          fontSize: 9.5,
-                          color: Color(0xFFE2E8F0),
-                          shadows: [
-                            Shadow(color: Colors.black, blurRadius: 4),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
               ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildDeviceSliceCards(
-    List<MeshDeviceSlice> slices,
-    MeshModelPreviewOption activeOption,
-    double needMb,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'ACTIVE MESH NODES · LAYER & TENSOR SPLIT TELEMETRY',
-          style: TextStyle(
-            fontFamily: _fontMono,
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.9,
-            color: Color(0xFF94A3B8),
+            ],
           ),
         ),
-        const SizedBox(height: 8),
-        for (var i = 0; i < slices.length; i++)
-          Padding(
-            padding: EdgeInsets.only(bottom: i == slices.length - 1 ? 0 : 8),
-            child: _buildTacticalNodeCard(
-              slice: slices[i],
-              color: _nodePalette[i % _nodePalette.length],
-              totalLayers: activeOption.layers,
-            ),
-          ),
       ],
     );
   }
+}
 
-  Widget _buildTacticalNodeCard({
-    required MeshDeviceSlice slice,
-    required Color color,
-    required int totalLayers,
-  }) {
-    final isUsed = slice.assignedModelMb > 0;
-    final linkLabel = slice.isLocal
-        ? 'LOCAL BUS · 0ms'
-        : '${slice.transportType.displayName.toUpperCase()} · ${slice.latencyMs.toStringAsFixed(0)}ms';
+/// CustomPainter that draws:
+/// 1. The hardware silhouette for the device category:
+///    - **Phone**: Vertical rounded chassis + top speaker/earpiece pill + bottom home indicator
+///    - **Tablet**: Wider rounded tablet chassis + top camera dot + side bezel frame
+///    - **PC**: Desktop monitor screen frame + bottom neck & stand base
+/// 2. The vertical stack of horizontal model layer bars (`[════════]`) from top to bottom
+///    inside the device's screen area (matching the uploaded reference diagram).
+class _DeviceSilhouetteLayerStackPainter extends CustomPainter {
+  final MeshDeviceSilhouetteType silhouetteType;
+  final int totalSlots;
+  final int filledSlots;
+  final double fillFraction;
+  final Color color;
+  final double pulse;
+  final bool isOffline;
 
-    return TweenAnimationBuilder<double>(
-      tween: Tween<double>(begin: 0.0, end: slice.modelFraction.clamp(0.0, 1.0)),
-      duration: const Duration(milliseconds: 650),
-      curve: Curves.easeOutCubic,
-      builder: (context, animatedModelShare, _) {
-        final modelPct = (animatedModelShare * 100).round();
+  _DeviceSilhouetteLayerStackPainter({
+    required this.silhouetteType,
+    required this.totalSlots,
+    required this.filledSlots,
+    required this.fillFraction,
+    required this.color,
+    required this.pulse,
+    required this.isOffline,
+  });
 
-        return Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0B1325).withValues(alpha: 0.85),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isUsed
-                  ? color.withValues(alpha: 0.42)
-                  : Colors.white.withValues(alpha: 0.08),
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: color.withValues(alpha: 0.45)),
-                    ),
-                    child: Icon(
-                      slice.deviceType.toLowerCase().contains('phone')
-                          ? Icons.smartphone_rounded
-                          : Icons.developer_board_rounded,
-                      size: 17,
-                      color: color,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                slice.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
-                              decoration: BoxDecoration(
-                                color: color.withValues(alpha: 0.14),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                linkLabel,
-                                style: TextStyle(
-                                  fontFamily: _fontMono,
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w700,
-                                  color: color,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '${slice.hardwareBackend}  ·  Pool Share: ${(slice.poolShareFraction * 100).round()}% (${(slice.capacityMb / 1024).toStringAsFixed(1)} GB Allocatable)',
-                          style: const TextStyle(
-                            fontSize: 11,
-                            color: Color(0xFF94A3B8),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        isUsed ? '$modelPct% OF MODEL' : '0% (IDLE)',
-                        style: TextStyle(
-                          fontFamily: _fontMono,
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w800,
-                          color: isUsed ? color : const Color(0xFF64748B),
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        isUsed
-                            ? 'Layers L${slice.layerStart.toString().padLeft(2, '0')}–L${slice.layerEnd.toString().padLeft(2, '0')} / $totalLayers'
-                            : 'Reserve Capacity',
-                        style: const TextStyle(
-                          fontFamily: _fontMono,
-                          fontSize: 10,
-                          color: Color(0xFF94A3B8),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              // Segmented Layer Block Visualizer
-              SizedBox(
-                height: 10,
-                child: CustomPaint(
-                  size: const Size(double.infinity, 10),
-                  painter: _LayerBlockBarPainter(
-                    fillFraction: slice.memoryUtilization.clamp(0.0, 1.0),
-                    color: color,
-                    segments: 24,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
+  @override
+  void paint(Canvas canvas, Size size) {
+    final borderPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..color = isOffline
+          ? color.withValues(alpha: 0.55)
+          : (filledSlots > 0
+              ? color.withValues(alpha: 0.75 + pulse * 0.20)
+              : Colors.white.withValues(alpha: 0.28));
+
+    final bodyFillPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..color = const Color(0xFF0E1628);
+
+    late Rect screenRect;
+
+    if (silhouetteType == MeshDeviceSilhouetteType.pc) {
+      // PC Monitor Frame + Neck + Base Stand
+      final monitorHeight = size.height - 24.0;
+      final monitorRRect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(2, 2, size.width - 4, monitorHeight),
+        const Radius.circular(12),
+      );
+      canvas.drawRRect(monitorRRect, bodyFillPaint);
+      canvas.drawRRect(monitorRRect, borderPaint);
+
+      // Monitor top webcam dot
+      canvas.drawCircle(
+        Offset(size.width / 2, 9),
+        2.2,
+        Paint()..color = color.withValues(alpha: 0.6),
+      );
+
+      // Monitor Neck
+      final neckRect = Rect.fromLTWH(size.width / 2 - 10, monitorHeight + 2, 20, 12);
+      canvas.drawRect(neckRect, bodyFillPaint);
+      canvas.drawRect(neckRect, borderPaint);
+
+      // Monitor Stand Base
+      final baseRRect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(size.width * 0.22, size.height - 10, size.width * 0.56, 7),
+        const Radius.circular(3.5),
+      );
+      canvas.drawRRect(baseRRect, bodyFillPaint);
+      canvas.drawRRect(baseRRect, borderPaint);
+
+      screenRect = Rect.fromLTWH(12, 18, size.width - 24, monitorHeight - 28);
+    } else if (silhouetteType == MeshDeviceSilhouetteType.tablet) {
+      // Tablet Frame (wide rounded frame with top camera dot & bottom bar)
+      final tabletRRect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(2, 2, size.width - 4, size.height - 4),
+        const Radius.circular(18),
+      );
+      canvas.drawRRect(tabletRRect, bodyFillPaint);
+      canvas.drawRRect(tabletRRect, borderPaint);
+
+      // Tablet top camera lens
+      canvas.drawCircle(
+        Offset(size.width / 2, 12),
+        2.8,
+        Paint()..color = Colors.white.withValues(alpha: 0.45),
+      );
+
+      screenRect = Rect.fromLTWH(13, 24, size.width - 26, size.height - 40);
+    } else {
+      // Phone Frame (rounded vertical chassis with top earpiece pill, matching reference image)
+      final phoneRRect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(2, 2, size.width - 4, size.height - 4),
+        const Radius.circular(22),
+      );
+      canvas.drawRRect(phoneRRect, bodyFillPaint);
+      canvas.drawRRect(phoneRRect, borderPaint);
+
+      // Top speaker/earpiece slot pill (just like the reference image!)
+      final notchRRect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(size.width * 0.34, 11, size.width * 0.32, 4.5),
+        const Radius.circular(3),
+      );
+      canvas.drawRRect(
+        notchRRect,
+        Paint()..color = Colors.white.withValues(alpha: 0.55),
+      );
+
+      screenRect = Rect.fromLTWH(13, 24, size.width - 26, size.height - 40);
+    }
+
+    // Draw stacked horizontal layer bars from top to bottom inside screenRect!
+    const double barGap = 3.5;
+    final double barHeight = math.min(
+      10.5,
+      math.max(5.0, (screenRect.height - (totalSlots - 1) * barGap) / totalSlots),
     );
+
+    for (var i = 0; i < totalSlots; i++) {
+      final top = screenRect.top + i * (barHeight + barGap);
+      if (top + barHeight > screenRect.bottom + 2) break;
+
+      final barRRect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(screenRect.left, top, screenRect.width, barHeight),
+        const Radius.circular(2.5),
+      );
+
+      final isFilled = !isOffline && i < filledSlots;
+      if (isFilled) {
+        final fillPaint = Paint()
+          ..style = PaintingStyle.fill
+          ..color = color.withValues(alpha: 0.65 + pulse * 0.20);
+        final strokePaint = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0
+          ..color = Colors.white.withValues(alpha: 0.55);
+
+        canvas.drawRRect(barRRect, fillPaint);
+        canvas.drawRRect(barRRect, strokePaint);
+      } else {
+        // Empty capacity slot outline
+        final emptyFill = Paint()
+          ..style = PaintingStyle.fill
+          ..color = Colors.white.withValues(alpha: 0.03);
+        final emptyStroke = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.8
+          ..color = Colors.white.withValues(alpha: 0.11);
+
+        canvas.drawRRect(barRRect, emptyFill);
+        canvas.drawRRect(barRRect, emptyStroke);
+      }
+    }
   }
+
+  @override
+  bool shouldRepaint(covariant _DeviceSilhouetteLayerStackPainter oldDelegate) =>
+      oldDelegate.silhouetteType != silhouetteType ||
+      oldDelegate.totalSlots != totalSlots ||
+      oldDelegate.filledSlots != filledSlots ||
+      oldDelegate.fillFraction != fillFraction ||
+      oldDelegate.color != color ||
+      oldDelegate.pulse != pulse ||
+      oldDelegate.isOffline != isOffline;
 }
 
 /// Renders a subtle sci-fi tactical coordinate grid behind the visualizer.
@@ -981,99 +1334,4 @@ class _SciFiHudGridPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _SciFiHudGridPainter oldDelegate) =>
       oldDelegate.accentColor != accentColor;
-}
-
-/// Renders a glowing neon fill with diagonal sci-fi energy scanlines inside each device chamber.
-class _SciFiCoreFillPainter extends CustomPainter {
-  final Color color;
-  final double pulse;
-
-  _SciFiCoreFillPainter({
-    required this.color,
-    required this.pulse,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (size.width <= 0 || size.height <= 0) return;
-
-    final rect = Offset.zero & size;
-    final gradient = LinearGradient(
-      begin: Alignment.centerLeft,
-      end: Alignment.centerRight,
-      colors: [
-        color.withValues(alpha: 0.32 + pulse * 0.12),
-        color.withValues(alpha: 0.62 + pulse * 0.18),
-      ],
-    );
-
-    canvas.drawRect(rect, Paint()..shader = gradient.createShader(rect));
-
-    // Diagonal tactical stripes
-    final stripePaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.10)
-      ..strokeWidth = 2.0;
-
-    const spacing = 12.0;
-    for (double x = -size.height; x < size.width + size.height; x += spacing) {
-      canvas.drawLine(
-        Offset(x, size.height),
-        Offset(x + size.height, 0),
-        stripePaint,
-      );
-    }
-
-    // Glowing leading edge bar
-    final edgePaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.75)
-      ..strokeWidth = 2.0;
-    canvas.drawLine(
-      Offset(size.width - 1, 0),
-      Offset(size.width - 1, size.height),
-      edgePaint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _SciFiCoreFillPainter oldDelegate) =>
-      oldDelegate.color != color || oldDelegate.pulse != pulse;
-}
-
-/// Draws a segmented sci-fi block gauge representing memory cells on a device.
-class _LayerBlockBarPainter extends CustomPainter {
-  final double fillFraction;
-  final Color color;
-  final int segments;
-
-  _LayerBlockBarPainter({
-    required this.fillFraction,
-    required this.color,
-    this.segments = 24,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    const gap = 3.0;
-    final totalGap = gap * (segments - 1);
-    final segWidth = math.max(2.0, (size.width - totalGap) / segments);
-    final activeSegments = (fillFraction * segments).ceil();
-
-    for (var i = 0; i < segments; i++) {
-      final left = i * (segWidth + gap);
-      final rrect = RRect.fromRectAndRadius(
-        Rect.fromLTWH(left, 0, segWidth, size.height),
-        const Radius.circular(2.5),
-      );
-      final isFilled = i < activeSegments && fillFraction > 0;
-      final paint = Paint()
-        ..color = isFilled
-            ? color.withValues(alpha: 0.85)
-            : Colors.white.withValues(alpha: 0.08);
-      canvas.drawRRect(rrect, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _LayerBlockBarPainter oldDelegate) =>
-      oldDelegate.fillFraction != fillFraction || oldDelegate.color != color;
 }

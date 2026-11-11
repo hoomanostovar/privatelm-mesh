@@ -1,12 +1,42 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:privatelm/models/transport_type.dart';
 import 'package:privatelm/services/cluster_service.dart';
+import 'package:privatelm/services/mesh_discovery_service.dart';
 import 'package:privatelm/services/mesh_distribution_service.dart';
+import 'package:privatelm/widgets/mesh_allocation_visualizer.dart';
 
 void main() {
   group('Unified Mesh & Instant Worker Exit Tests', () {
     test('workerStopsWithApp is false on Windows/Desktop so exiting worker mode never requires restart', () {
       expect(ClusterService.workerStopsWithApp, isFalse);
+    });
+
+    test('classifySilhouetteType selects appropriate symbol for PC, Tablet, and Phone', () {
+      expect(classifySilhouetteType('PC', 'Gaming PC'), MeshDeviceSilhouetteType.pc);
+      expect(classifySilhouetteType('Mac', 'MacBook Pro'), MeshDeviceSilhouetteType.pc);
+      expect(classifySilhouetteType('Tablet', 'Galaxy Tab S9'), MeshDeviceSilhouetteType.tablet);
+      expect(classifySilhouetteType('Device', 'iPad Pro 12.9'), MeshDeviceSilhouetteType.tablet);
+      expect(classifySilhouetteType('Phone', 'Samsung Galaxy S24'), MeshDeviceSilhouetteType.phone);
+    });
+
+    test('MeshNode tracks offline state and custom rename via copyWith', () {
+      final node = MeshNode(
+        id: 'node_android_123',
+        name: 'SM-S928B',
+        host: '192.168.1.45',
+        deviceType: 'Phone',
+        freeRamGB: 6.0,
+        status: 'ready',
+        lastSeen: DateTime.now(),
+      );
+      expect(node.isOffline, isFalse);
+
+      final renamedAndOffline = node.copyWith(
+        name: 'Samsung S24 (Kitchen)',
+        status: 'offline',
+      );
+      expect(renamedAndOffline.name, 'Samsung S24 (Kitchen)');
+      expect(renamedAndOffline.isOffline, isTrue);
     });
 
     test('MeshDeviceSlice computes assignedLayers and proportional shares accurately', () {
