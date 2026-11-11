@@ -11,9 +11,11 @@ import 'controllers/settings_controller.dart';
 import 'controllers/cloud_model_controller.dart';
 import 'controllers/server_controller.dart';
 import 'controllers/model_controller.dart';
+import 'controllers/task_controller.dart';
 import 'core/theme.dart';
 //////
 import 'core/routes.dart';
+import 'services/agent_harness_service.dart';
 import 'services/hive_service.dart';
 import 'services/inference_service.dart';
 import 'services/cluster_service.dart';
@@ -137,6 +139,8 @@ void main() {
     appLog.info('Notifications initialized');
     Get.put(ServerController(), permanent: true);
     Get.put(ModelController());
+    Get.put(AgentHarnessService(), permanent: true);
+    Get.put(TaskController(), permanent: true);
     appLog.info('All services initialized, launching app');
 
     // Auto-configure inference settings based on device RAM

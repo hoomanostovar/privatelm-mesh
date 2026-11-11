@@ -8,7 +8,10 @@ import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../controllers/settings_controller.dart';
+import '../controllers/task_controller.dart';
 import '../core/constants.dart';
+import '../models/task_model.dart';
+import 'agent_harness_service.dart';
 import 'inference_service.dart';
 
 class OpenAiServerService {
@@ -112,6 +115,10 @@ class OpenAiServerService {
         await _handleCapabilities(request);
         return;
       }
+      if (path.startsWith('/v1/agent/')) {
+        await _handleAgentRoutes(request, path);
+        return;
+      }
       if (request.method == 'POST' && path == '/v1/chat/completions') {
         await _handleChatCompletions(request);
         return;
@@ -159,16 +166,34 @@ class OpenAiServerService {
   Future<void> _handleModels(HttpRequest request) async {
     final inference = Get.find<InferenceService>();
     final hasModel = inference.isModelLoaded.value;
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     await _json(request, {
       'object': 'list',
       'data': [
-        if (hasModel)
+        if (hasModel) ...[
           {
             'id': inference.loadedModelName.value,
             'object': 'model',
-            'created': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+            'created': now,
             'owned_by': 'local',
-          }
+          },
+          {
+            'id': 'privatelm-agent',
+            'object': 'model',
+            'created': now,
+            'owned_by': 'privatelm-hermes-harness',
+            'description':
+                'Hermes-Lite ReAct Agent with server-side tool execution (workspace_files, web_search, web_fetch, memory_store, shell_exec)',
+          },
+          {
+            'id': 'privatelm-chug-queue',
+            'object': 'model',
+            'created': now,
+            'owned_by': 'privatelm-hermes-harness',
+            'description':
+                'Queues the prompt as an asynchronous background agent task in the PrivateLM Chug Queue',
+          },
+        ]
       ],
     });
   }
@@ -177,6 +202,9 @@ class OpenAiServerService {
     final inference = Get.find<InferenceService>();
     final hasModel = inference.isModelLoaded.value;
     final isLiteRt = hasModel && inference.loadedModelRuntime.value == 'litert';
+    final harness = Get.isRegistered<AgentHarnessService>()
+        ? Get.find<AgentHarnessService>()
+        : null;
     await _json(request, {
       'server': 'AI Chat Local OpenAI API',
       'running': true,
@@ -189,24 +217,31 @@ class OpenAiServerService {
         'audio': isLiteRt,
         'streaming': hasModel,
         'gguf': hasModel && !isLiteRt,
+        'agent_harness': Get.isRegistered<TaskController>(),
+        'agent_tools': TaskModel.defaultTools,
+        'agent_workspace': harness?.workspacePath.value,
       },
     });
   }
 
   Future<void> _handleChatCompletions(HttpRequest request) async {
     final inference = Get.find<InferenceService>();
-    if (!await _acquire(request, inference)) return;
     final tempFiles = <File>[];
+    var acquired = false;
     try {
       final body = await _readJson(request);
-      // One model is loaded at a time, and clients (PC chat apps, editors)
-      // often send their own model name: serve the loaded model regardless,
-      // as llama-server and LM Studio do.
-      final model = (body['model'] as String?)?.trim();
-      if (model != null &&
-          model.isNotEmpty &&
-          model != inference.loadedModelName.value) {
-        _onLog?.call('Request for "$model"; serving ${inference.loadedModelName.value}');
+      final model = (body['model'] as String?)?.trim() ?? '';
+      final isQueueRequest =
+          model == 'privatelm-chug-queue' || body['queue'] == true;
+      final isAgentRequest =
+          model == 'privatelm-agent' || body['agent'] == true;
+
+      // Optional workspace override from IDE client
+      final wsOverride = (body['workspace_path'] as String?)?.trim();
+      if (wsOverride != null &&
+          wsOverride.isNotEmpty &&
+          Get.isRegistered<AgentHarnessService>()) {
+        await Get.find<AgentHarnessService>().setWorkspacePath(wsOverride);
       }
 
       final parsed = await _parseChatRequest(body, tempFiles);
@@ -214,6 +249,108 @@ class OpenAiServerService {
         await _json(request, {'error': parsed.error},
             status: HttpStatus.badRequest);
         return;
+      }
+
+      // 1. Asynchronous Chug Queue submission (does not block if model is busy)
+      if (isQueueRequest && Get.isRegistered<TaskController>()) {
+        final taskCtrl = Get.find<TaskController>();
+        final schedule = (body['schedule'] as String?)?.trim() ?? 'once';
+        final maxSteps = (body['max_steps'] as num?)?.toInt();
+        final allowedTools = (body['allowed_tools'] is List)
+            ? (body['allowed_tools'] as List).map((e) => '$e').toList()
+            : null;
+        await taskCtrl.createTask(
+          parsed.prompt,
+          schedule: schedule,
+          maxSteps: maxSteps,
+          allowedTools: allowedTools,
+        );
+        final created = taskCtrl.tasks.isNotEmpty ? taskCtrl.tasks.first : null;
+        final reply = created != null
+            ? 'Queued background agent task `${created.id}` in PrivateLM Chug Queue.\n'
+                '- **Goal**: ${created.goal}\n'
+                '- **Schedule**: `${created.schedule}`\n'
+                '- **Status URL**: `${localUrl ?? 'http://localhost:8080'}/v1/agent/tasks/${created.id}`'
+            : 'Queued background agent task in PrivateLM Chug Queue.';
+        await _json(request, _chatResponse('privatelm-chug-queue', reply));
+        return;
+      }
+
+      if (!await _acquire(request, inference)) return;
+      acquired = true;
+
+      // 2. Interactive Hermes-Lite ReAct Agent execution on the server
+      if (isAgentRequest && Get.isRegistered<TaskController>()) {
+        final taskCtrl = Get.find<TaskController>();
+        _onLog?.call('Running Hermes-Lite Agent for IDE request');
+        if (body['stream'] == true) {
+          final response = request.response;
+          _addCorsHeaders(response);
+          final id = 'chatcmpl-${_id()}';
+          final created = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+          final sse = await _SseStream.open(response, onDisconnect: () {
+            unawaited(inference.stopGeneration());
+          });
+          var prevLen = 0;
+          final fullText = await taskCtrl.runInteractiveChatAgentTurn(
+            userPrompt: parsed.prompt,
+            chatHistory: parsed.history,
+            baseSystemPrompt: parsed.systemPrompt ??
+                _defaultSystemPrompt(inference.loadedModelName.value),
+            onProgressUpdate: (accumulated) {
+              if (accumulated.length > prevLen) {
+                final delta = accumulated.substring(prevLen);
+                prevLen = accumulated.length;
+                sse.event({
+                  'id': id,
+                  'object': 'chat.completion.chunk',
+                  'created': created,
+                  'model': 'privatelm-agent',
+                  'choices': [
+                    {
+                      'index': 0,
+                      'delta': {'content': delta},
+                      'finish_reason': null,
+                    }
+                  ],
+                });
+              }
+            },
+          );
+          if (fullText.length > prevLen) {
+            sse.event({
+              'id': id,
+              'object': 'chat.completion.chunk',
+              'created': created,
+              'model': 'privatelm-agent',
+              'choices': [
+                {
+                  'index': 0,
+                  'delta': {'content': fullText.substring(prevLen)},
+                  'finish_reason': 'stop',
+                }
+              ],
+            });
+          }
+          sse.raw('data: [DONE]\n\n');
+          await sse.close();
+        } else {
+          final fullText = await taskCtrl.runInteractiveChatAgentTurn(
+            userPrompt: parsed.prompt,
+            chatHistory: parsed.history,
+            baseSystemPrompt: parsed.systemPrompt ??
+                _defaultSystemPrompt(inference.loadedModelName.value),
+            onProgressUpdate: (_) {},
+          );
+          await _json(request, _chatResponse('privatelm-agent', fullText));
+        }
+        return;
+      }
+
+      // 3. Standard raw model inference
+      if (model.isNotEmpty && model != inference.loadedModelName.value) {
+        _onLog?.call(
+            'Request for "$model"; serving ${inference.loadedModelName.value}');
       }
 
       final maxTokens = _maxTokens(body);
@@ -241,9 +378,160 @@ class OpenAiServerService {
             request, _chatResponse(inference.loadedModelName.value, text));
       }
     } finally {
-      _busy = false;
+      if (acquired) _busy = false;
       await _deleteFiles(tempFiles);
     }
+  }
+
+  /// Handles `/v1/agent/tasks`, `/v1/agent/memory`, and `/v1/agent/workspace`.
+  Future<void> _handleAgentRoutes(HttpRequest request, String path) async {
+    if (!Get.isRegistered<TaskController>() ||
+        !Get.isRegistered<AgentHarnessService>()) {
+      await _json(request, {'error': 'Agent harness not initialized'},
+          status: HttpStatus.serviceUnavailable);
+      return;
+    }
+    final taskCtrl = Get.find<TaskController>();
+    final harness = Get.find<AgentHarnessService>();
+
+    // GET /v1/agent/workspace & POST /v1/agent/workspace
+    if (path == '/v1/agent/workspace') {
+      if (request.method == 'GET') {
+        await _json(request, {
+          'workspace_path': harness.workspacePath.value,
+          'shell_policy': harness.shellPolicy.value,
+          'max_steps': harness.maxSteps.value,
+          'idle_aware_pause': harness.idleAwarePause.value,
+        });
+        return;
+      }
+      if (request.method == 'POST') {
+        final body = await _readJson(request);
+        final newPath = (body['workspace_path'] as String?)?.trim();
+        if (newPath != null && newPath.isNotEmpty) {
+          await harness.setWorkspacePath(newPath);
+        }
+        final policy = (body['shell_policy'] as String?)?.trim();
+        if (policy != null && policy.isNotEmpty) {
+          await harness.setShellPolicy(policy);
+        }
+        final maxSteps = (body['max_steps'] as num?)?.toInt();
+        if (maxSteps != null) {
+          await harness.setMaxSteps(maxSteps);
+        }
+        await _json(request, {
+          'status': 'updated',
+          'workspace_path': harness.workspacePath.value,
+          'shell_policy': harness.shellPolicy.value,
+          'max_steps': harness.maxSteps.value,
+        });
+        return;
+      }
+    }
+
+    // GET /v1/agent/memory & POST /v1/agent/memory
+    if (path == '/v1/agent/memory') {
+      if (request.method == 'GET') {
+        await _json(request, {
+          'entries': harness.memoryEntries,
+        });
+        return;
+      }
+      if (request.method == 'POST') {
+        final body = await _readJson(request);
+        final action = (body['action'] as String?)?.trim() ?? 'set';
+        final key = (body['key'] as String?)?.trim() ?? '';
+        final value = (body['value'] as String?)?.trim() ?? '';
+        final result = await harness.executeToolCall(
+          AgentToolCall(
+            name: 'memory_store',
+            arguments: {'action': action, 'key': key, 'value': value},
+          ),
+        );
+        await _json(request, {
+          'ok': result.ok,
+          'output': result.output,
+          'entries': harness.memoryEntries,
+        });
+        return;
+      }
+    }
+
+    // GET /v1/agent/tasks & POST /v1/agent/tasks
+    if (path == '/v1/agent/tasks') {
+      if (request.method == 'GET') {
+        await _json(request, {
+          'is_executing': taskCtrl.isExecuting.value,
+          'is_paused_for_chat': taskCtrl.isPausedForChat.value,
+          'workspace_path': harness.workspacePath.value,
+          'tasks': taskCtrl.tasks.map((t) => t.toMap()).toList(),
+        });
+        return;
+      }
+      if (request.method == 'POST') {
+        final body = await _readJson(request);
+        final goal = (body['goal'] as String?)?.trim() ?? '';
+        if (goal.isEmpty) {
+          await _json(request, {'error': 'goal is required'},
+              status: HttpStatus.badRequest);
+          return;
+        }
+        final wsOverride = (body['workspace_path'] as String?)?.trim();
+        if (wsOverride != null && wsOverride.isNotEmpty) {
+          await harness.setWorkspacePath(wsOverride);
+        }
+        final schedule = (body['schedule'] as String?)?.trim() ?? 'once';
+        final maxSteps = (body['max_steps'] as num?)?.toInt();
+        final allowedTools = (body['allowed_tools'] is List)
+            ? (body['allowed_tools'] as List).map((e) => '$e').toList()
+            : null;
+        await taskCtrl.createTask(
+          goal,
+          schedule: schedule,
+          maxSteps: maxSteps,
+          allowedTools: allowedTools,
+        );
+        final created = taskCtrl.tasks.isNotEmpty ? taskCtrl.tasks.first : null;
+        await _json(
+          request,
+          created?.toMap() ?? {'status': 'queued'},
+          status: HttpStatus.created,
+        );
+        return;
+      }
+    }
+
+    // /v1/agent/tasks/<id>[/approve|/reject]
+    if (path.startsWith('/v1/agent/tasks/')) {
+      final rest = path.substring('/v1/agent/tasks/'.length);
+      final parts = rest.split('/');
+      final taskId = parts.first;
+      final idx = taskCtrl.tasks.indexWhere((t) => t.id == taskId);
+      if (idx == -1) {
+        await _json(request, {'error': 'Task not found'},
+            status: HttpStatus.notFound);
+        return;
+      }
+      if (request.method == 'GET' && parts.length == 1) {
+        await _json(request, taskCtrl.tasks[idx].toMap());
+        return;
+      }
+      if (request.method == 'POST' && parts.length == 2) {
+        if (parts[1] == 'approve') {
+          taskCtrl.approvePendingShellCommand();
+          await _json(request, {'status': 'approved', 'task_id': taskId});
+          return;
+        }
+        if (parts[1] == 'reject') {
+          taskCtrl.rejectPendingShellCommand();
+          await _json(request, {'status': 'rejected', 'task_id': taskId});
+          return;
+        }
+      }
+    }
+
+    await _json(request, {'error': 'Unknown agent endpoint'},
+        status: HttpStatus.notFound);
   }
 
   /// Claims the model for one request. Rejects before the body is read when

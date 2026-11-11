@@ -27,6 +27,8 @@ import '../services/app_log_service.dart';
 import '../services/image_generation_notification_service.dart';
 import '../services/document_extractor_service.dart';
 import '../services/context_compactor_service.dart';
+import '../services/agent_harness_service.dart';
+import '../controllers/task_controller.dart';
 import '../utils/thought_parser.dart';
 
 const int _visionImageMaxSide = 768;
@@ -876,28 +878,52 @@ class ChatController extends GetxController {
                 : '❌ Local image generation failed.';
           }
         } else {
-          final inference = Get.find<InferenceService>();
+          final agentEnabled = Get.isRegistered<AgentHarnessService>() &&
+              Get.find<AgentHarnessService>().chatAgentModeEnabled.value &&
+              Get.isRegistered<TaskController>() &&
+              imagePath == null &&
+              fileType != 'audio';
 
-          // LiteRT models can consume image/audio attachments. GGUF currently
-          // returns a clear unsupported message from the inference layer.
+          if (agentEnabled) {
+            final priorHistory = history.length > 1
+                ? history.sublist(0, history.length - 1)
+                : <Map<String, String>>[];
+            rawResponse =
+                await Get.find<TaskController>().runInteractiveChatAgentTurn(
+              userPrompt: effectiveText,
+              baseSystemPrompt: _effectiveSystemPrompt,
+              chatHistory: priorHistory,
+              onProgressUpdate: (statusMd) {
+                if (generationId != _generationSerial) return;
+                streamingResponse.value = statusMd;
+                trackThoughtTiming();
+                _scrollToBottom();
+              },
+            );
+          } else {
+            final inference = Get.find<InferenceService>();
 
-          rawResponse = await inference.generate(
-            prompt: effectiveText,
-            systemPrompt: _effectiveSystemPrompt,
-            conversationHistory: history,
-            source: 'chat',
-            imagePath: imagePath,
-            audioPath: fileType == 'audio' ? filePath : null,
-            stopSequences:
-                Get.find<SettingsController>().stopSequences.toList(),
-            onToken: (token) {
-              // Ignore tokens from a generation the user already stopped.
-              if (generationId != _generationSerial) return;
-              streamingResponse.value += token;
-              trackThoughtTiming();
-              _scrollToBottom();
-            },
-          );
+            // LiteRT models can consume image/audio attachments. GGUF currently
+            // returns a clear unsupported message from the inference layer.
+
+            rawResponse = await inference.generate(
+              prompt: effectiveText,
+              systemPrompt: _effectiveSystemPrompt,
+              conversationHistory: history,
+              source: 'chat',
+              imagePath: imagePath,
+              audioPath: fileType == 'audio' ? filePath : null,
+              stopSequences:
+                  Get.find<SettingsController>().stopSequences.toList(),
+              onToken: (token) {
+                // Ignore tokens from a generation the user already stopped.
+                if (generationId != _generationSerial) return;
+                streamingResponse.value += token;
+                trackThoughtTiming();
+                _scrollToBottom();
+              },
+            );
+          }
         }
       } else {
         final cloud = Get.find<CloudService>();

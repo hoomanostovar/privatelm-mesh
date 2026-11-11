@@ -4,7 +4,7 @@
 > *Pool memory and compute across your personal PCs, Macs, Linux machines, tablets, and phones to run local LLMs collaboratively.*  
 > GitHub Repository: [https://github.com/hoomanostovar/privatelm-mesh](https://github.com/hoomanostovar/privatelm-mesh)
 
-[![Release](https://img.shields.io/badge/Release-v1.2.0-blue?style=for-the-badge&logo=github)](https://github.com/hoomanostovar/privatelm-mesh/releases/latest)
+[![Release](https://img.shields.io/badge/Release-v1.3.0-blue?style=for-the-badge&logo=github)](https://github.com/hoomanostovar/privatelm-mesh/releases/latest)
 [![Platforms](https://img.shields.io/badge/Platforms-Windows%20%7C%20Android%20%7C%20macOS%20%7C%20Linux%20%7C%20iOS-brightgreen?style=for-the-badge)](https://github.com/hoomanostovar/privatelm-mesh/releases/latest)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](./LICENSE)
 
@@ -18,7 +18,21 @@ PrivateLM-Mesh is self-contained: native desktop and mobile inference engines (`
 
 ---
 
-## 🚀 Key Features in v1.2.0
+## 🚀 Key Features in v1.3.0
+
+### 🤖 Hermes-Lite Agent Harness & Idle-Aware "Chug Queue"
+- **Hermes-Style Multi-Step ReAct Loop**: Local and mesh-pooled models (from 1B to 70B+) can autonomously reason and invoke tools using `<tools>` system declarations and `<tool_call>{"name": "...", "arguments": {...}}</tool_call>` blocks. Generation halts immediately on `</tool_call>` so models never hallucinate tool outputs.
+- **Small-Model Guardrails & Auto-Compaction**: Built-in duplicate-call detection (`canonicalSignature`), configurable `maxSteps` (default 8), and automatic intermediate `<tool_response>` compaction ensure 4K/8K local context windows never overflow.
+- **5 Built-in Sandboxed Local Tools**:
+  1. `workspace_files` — Sandboxed `list`, `read`, `write`, `append`, `search`, and `delete` inside a user-configurable Agent Workspace folder (`Documents/PrivateLM_Agent_Workspace`).
+  2. `web_search` — Keyless DuckDuckGo HTML search returning top titles, URLs, and snippets.
+  3. `web_fetch` — Downloads webpages and strips HTML/JS bloat into clean, readable Markdown.
+  4. `memory_store` — Persistent cross-session key-value memory stored in Hive and mirrored to `MEMORY.md` inside the Agent Workspace.
+  5. `shell_exec` — Local shell execution inside the workspace with configurable policy (`safe_readonly`, `ask_approval` with 1-click user confirmation, or `disabled`).
+- **Idle-Aware Background "Chug Queue" (`Agents` Tab)**: Queue one-shot, recurring (`hourly`, `every_6h`, `daily`), or folder-watching (`watch_workspace`) background tasks that chug at your home setup's own pace. Automatically pauses (`PAUSED FOR CHAT`) the instant you send a message in the main **Chat** tab and resumes when your interactive chat finishes.
+- **Interactive Chat Agent Mode & OpenAI Agent Server (`:8080/v1`)**:
+  - Toggle **`Agent Tools: On`** directly in the Chat input bar for interactive multi-step tool use.
+  - Connect any IDE or OpenAI SDK client to `http://<device-ip>:8080/v1` and select `"model": "privatelm-agent"` for server-side Hermes tool execution, `"model": "privatelm-chug-queue"` for non-blocking background task submission, or use `/v1/agent/tasks`, `/v1/agent/memory`, and `/v1/agent/workspace`.
 
 ### 🌐 Hierarchy-Free Unified Peer-to-Peer Mesh
 - **Equal-Peer Resource Pooling**: In **Unified Mesh Pool** mode, every device automatically runs its local RPC worker listener (`port 50052`) to lend memory to peers while simultaneously allowing you to load and chat with models from its own UI (`port 50051`). No manual Master vs. Worker hierarchy setup is required.
@@ -39,17 +53,17 @@ PrivateLM-Mesh is self-contained: native desktop and mobile inference engines (`
 
 ---
 
-## 📥 Official Downloads (v1.2.0 — Latest)
+## 📥 Official Downloads (v1.3.0 — Latest)
 
-Download the official `v1.2.0` binaries from the [**GitHub Releases Page**](https://github.com/hoomanostovar/privatelm-mesh/releases/tag/v1.2.0):
+Download the official `v1.3.0` binaries from the [**GitHub Releases Page**](https://github.com/hoomanostovar/privatelm-mesh/releases/tag/v1.3.0):
 
 | Platform | Local Inference & GPU Backend | Mesh Role | Package | Direct Download |
 | :--- | :--- | :--- | :--- | :--- |
-| **Windows PC (x64)** | ✅ Vulkan / CUDA / CPU AVX2 | Unified Mesh / Coordinator / Worker | Portable ZIP | [**`PrivateLM-Mesh-Windows-x64.zip`**](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.2.0/PrivateLM-Mesh-Windows-x64.zip) |
-| **Android Phone / Tablet** | ✅ Vulkan / CPU NEON / LiteRT | Unified Mesh / Coordinator / Worker | Standalone APK | [**`PrivateLM-Mesh-Android.apk`**](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.2.0/PrivateLM-Mesh-Android.apk) |
-| **macOS (Apple Silicon)** | ✅ Apple Metal | Unified Mesh / Coordinator / Worker | Portable ZIP | [**`PrivateLM-Mesh-macOS.zip`**](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.2.0/PrivateLM-Mesh-macOS.zip) |
-| **Linux (x64)** | ✅ Vulkan / CUDA / CPU | Unified Mesh / Coordinator / Worker | Tarball | [**`PrivateLM-Mesh-Linux-x64.tar.gz`**](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.2.0/PrivateLM-Mesh-Linux-x64.tar.gz) |
-| **Headless Mesh Daemon** | ⚡ Rust Discovery & Worker Daemon | Background Worker | ZIP / Tarball | [**`privatelm-mesh-daemon-windows-x64.zip`**](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.2.0/privatelm-mesh-daemon-windows-x64.zip) |
+| **Windows PC (x64)** | ✅ Vulkan / CUDA / CPU AVX2 | Unified Mesh / Coordinator / Worker | Portable ZIP | [**`PrivateLM-Mesh-Windows-x64.zip`**](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.3.0/PrivateLM-Mesh-Windows-x64.zip) |
+| **Android Phone / Tablet** | ✅ Vulkan / CPU NEON / LiteRT | Unified Mesh / Coordinator / Worker | Standalone APK | [**`PrivateLM-Mesh-Android.apk`**](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.3.0/PrivateLM-Mesh-Android.apk) |
+| **macOS (Apple Silicon)** | ✅ Apple Metal | Unified Mesh / Coordinator / Worker | Portable ZIP | [**`PrivateLM-Mesh-macOS.zip`**](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.3.0/PrivateLM-Mesh-macOS.zip) |
+| **Linux (x64)** | ✅ Vulkan / CUDA / CPU | Unified Mesh / Coordinator / Worker | Tarball | [**`PrivateLM-Mesh-Linux-x64.tar.gz`**](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.3.0/PrivateLM-Mesh-Linux-x64.tar.gz) |
+| **Headless Mesh Daemon** | ⚡ Rust Discovery & Worker Daemon | Background Worker | ZIP / Tarball | [**`privatelm-mesh-daemon-windows-x64.zip`**](https://github.com/hoomanostovar/privatelm-mesh/releases/download/v1.3.0/privatelm-mesh-daemon-windows-x64.zip) |
 
 ---
 

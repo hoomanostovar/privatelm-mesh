@@ -14,6 +14,7 @@ import '../services/cluster_service.dart';
 import '../services/inference_service.dart';
 import '../services/local_image_service.dart';
 import '../services/mesh_distribution_service.dart';
+import '../services/agent_harness_service.dart';
 import '../ffi/sd_ffi_bindings.dart';
 import '../utils/thought_parser.dart';
 import '../widgets/attachment_preview.dart';
@@ -1244,6 +1245,9 @@ class ChatView extends GetView<ChatController> {
               final settings = Get.find<SettingsController>();
               final effort = settings.reasoningEffort.value;
               final showReasoning = settings.showModelReasoning.value;
+              final agentMode = Get.isRegistered<AgentHarnessService>()
+                  ? Get.find<AgentHarnessService>().chatAgentModeEnabled.value
+                  : false;
               final effortLabel = switch (effort) {
                 'off' => 'Off · Instant',
                 'low' => 'Low · Fast',
@@ -1259,81 +1263,134 @@ class ChatView extends GetView<ChatController> {
 
               return Padding(
                 padding: const EdgeInsets.fromLTRB(4, 0, 4, 7),
-                child: Row(
-                  children: [
-                    InkWell(
-                      borderRadius: BorderRadius.circular(14),
-                      onTap: () => _showReasoningEffortSheet(context),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: effortColor.withValues(alpha: 0.10),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: effortColor.withValues(alpha: 0.30),
-                            width: 0.8,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: () => _showReasoningEffortSheet(context),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: effortColor.withValues(alpha: 0.10),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: effortColor.withValues(alpha: 0.30),
+                              width: 0.8,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.psychology_rounded, size: 14, color: effortColor),
+                              const SizedBox(width: 5),
+                              Text(
+                                'Effort: $effortLabel',
+                                style: GoogleFonts.inter(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: effortColor,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Icon(Icons.info_outline_rounded, size: 12.5, color: effortColor),
+                            ],
                           ),
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.psychology_rounded, size: 14, color: effortColor),
-                            const SizedBox(width: 5),
-                            Text(
-                              'Effort: $effortLabel',
-                              style: GoogleFonts.inter(
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w600,
-                                color: effortColor,
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            Icon(Icons.info_outline_rounded, size: 12.5, color: effortColor),
-                          ],
-                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    InkWell(
-                      borderRadius: BorderRadius.circular(14),
-                      onTap: () => settings.setShowModelReasoning(!showReasoning),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: isDark
-                              ? Colors.white.withValues(alpha: 0.05)
-                              : Colors.black.withValues(alpha: 0.04),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: _sep(context), width: 0.8),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              showReasoning
-                                  ? Icons.visibility_rounded
-                                  : Icons.visibility_off_outlined,
-                              size: 13.5,
-                              color: showReasoning
-                                  ? _appleBlue(context)
-                                  : Theme.of(context).hintColor,
-                            ),
-                            const SizedBox(width: 5),
-                            Text(
-                              showReasoning ? 'Thinking: Shown' : 'Thinking: Hidden',
-                              style: GoogleFonts.inter(
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w500,
+                      const SizedBox(width: 8),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: () => settings.setShowModelReasoning(!showReasoning),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? Colors.white.withValues(alpha: 0.05)
+                                : Colors.black.withValues(alpha: 0.04),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: _sep(context), width: 0.8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                showReasoning
+                                    ? Icons.visibility_rounded
+                                    : Icons.visibility_off_outlined,
+                                size: 13.5,
                                 color: showReasoning
-                                    ? (isDark ? Colors.white : Colors.black87)
+                                    ? _appleBlue(context)
                                     : Theme.of(context).hintColor,
                               ),
-                            ),
-                          ],
+                              const SizedBox(width: 5),
+                              Text(
+                                showReasoning ? 'Thinking: Shown' : 'Thinking: Hidden',
+                                style: GoogleFonts.inter(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w500,
+                                  color: showReasoning
+                                      ? (isDark ? Colors.white : Colors.black87)
+                                      : Theme.of(context).hintColor,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                  ],
+                      if (Get.isRegistered<AgentHarnessService>()) ...[
+                        const SizedBox(width: 8),
+                        InkWell(
+                          borderRadius: BorderRadius.circular(14),
+                          onTap: () {
+                            final h = Get.find<AgentHarnessService>();
+                            h.setChatAgentModeEnabled(!agentMode);
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: agentMode
+                                  ? const Color(0xFFFF9F0A).withValues(alpha: 0.14)
+                                  : (isDark
+                                      ? Colors.white.withValues(alpha: 0.05)
+                                      : Colors.black.withValues(alpha: 0.04)),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: agentMode
+                                    ? const Color(0xFFFF9F0A).withValues(alpha: 0.45)
+                                    : _sep(context),
+                                width: 0.8,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.smart_toy_rounded,
+                                  size: 13.5,
+                                  color: agentMode
+                                      ? const Color(0xFFFF9F0A)
+                                      : Theme.of(context).hintColor,
+                                ),
+                                const SizedBox(width: 5),
+                                Text(
+                                  agentMode ? 'Agent Tools: On' : 'Agent Tools: Off',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 11.5,
+                                    fontWeight: agentMode ? FontWeight.w600 : FontWeight.w500,
+                                    color: agentMode
+                                        ? const Color(0xFFFF9F0A)
+                                        : Theme.of(context).hintColor,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
               );
             }),

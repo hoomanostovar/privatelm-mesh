@@ -126,6 +126,11 @@ class ServerView extends GetView<ServerController> {
                     url: controller.localUrl.value == null
                         ? null
                         : controller.openAiBaseUrl),
+                _UrlRow(
+                    label: 'Agent Chug Queue API',
+                    url: controller.localUrl.value == null
+                        ? null
+                        : '${controller.openAiBaseUrl}/agent/tasks'),
               ]),
               const SizedBox(height: 12),
               _HealthTest(baseUrl: controller.localUrl.value),
@@ -146,10 +151,24 @@ class ServerView extends GetView<ServerController> {
               ),
               const SizedBox(height: 12),
               _CodeBlock(
+                title: 'Hermes-Lite Agent (server-side tool execution)',
+                lang: 'curl',
+                code:
+                    'curl ${controller.baseUrl}/v1/chat/completions \\\n  -H "Content-Type: application/json"${_authHeader()} \\\n  -d \'{"model":"privatelm-agent","messages":[{"role":"user","content":"List files in the workspace and summarize them"}]}\'',
+              ),
+              const SizedBox(height: 12),
+              _CodeBlock(
+                title: 'Queue background task in Chug Queue',
+                lang: 'curl',
+                code:
+                    'curl ${controller.baseUrl}/v1/agent/tasks \\\n  -H "Content-Type: application/json"${_authHeader()} \\\n  -d \'{"goal":"Search the web for Qwen3 benchmarks and save a summary to benchmarks.md","schedule":"once"}\'',
+              ),
+              const SizedBox(height: 12),
+              _CodeBlock(
                 title: 'OpenAI SDK',
                 lang: 'python',
                 code:
-                    'from openai import OpenAI\n\nclient = OpenAI(\n    base_url="${controller.baseUrl}/v1",\n    api_key="${controller.requiresApiKey ? controller.apiKey.value : "not-needed"}"\n)\n\nresponse = client.chat.completions.create(\n    model="${controller.inference.loadedModelName.value}",\n    messages=[{"role": "user", "content": "Hello"}],\n)\nprint(response.choices[0].message.content)',
+                    'from openai import OpenAI\n\nclient = OpenAI(\n    base_url="${controller.baseUrl}/v1",\n    api_key="${controller.requiresApiKey ? controller.apiKey.value : "not-needed"}"\n)\n\nresponse = client.chat.completions.create(\n    model="privatelm-agent", # or "${controller.inference.loadedModelName.value}"\n    messages=[{"role": "user", "content": "Hello"}],\n)\nprint(response.choices[0].message.content)',
               ),
             ],
           ],

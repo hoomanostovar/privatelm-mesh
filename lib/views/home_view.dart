@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../controllers/home_controller.dart';
 import '../widgets/chat_drawer.dart';
 import 'chat_view.dart';
+import 'task_view.dart';
 import 'model_view.dart';
 import 'mesh_network_view.dart';
 import 'settings_view.dart';
@@ -25,6 +26,10 @@ class HomeView extends GetView<HomeController> {
         icon: Icons.hub_outlined,
         activeIcon: Icons.hub_rounded,
         label: 'Mesh'),
+    _NavItem(
+        icon: Icons.smart_toy_outlined,
+        activeIcon: Icons.smart_toy_rounded,
+        label: 'Agents'),
     _NavItem(
         icon: Icons.settings_outlined,
         activeIcon: Icons.settings,
@@ -56,6 +61,7 @@ class HomeView extends GetView<HomeController> {
                 ChatView(),
                 ModelView(),
                 MeshNetworkView(),
+                TaskView(),
                 SettingsView(),
               ],
             );

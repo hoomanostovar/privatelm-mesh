@@ -88,6 +88,12 @@ class AppConstants {
   static const String keyLocalNodeId = 'local_mesh_node_id';
   static const String keyMeshDeviceAliases = 'mesh_device_aliases';
   static const String keyKnownMeshNodes = 'known_mesh_nodes';
+  static const String keyAgentWorkspacePath = 'agent_workspace_path';
+  static const String keyAgentMaxSteps = 'agent_max_steps';
+  static const String keyAgentShellPolicy = 'agent_shell_policy'; // 'safe_readonly', 'ask_approval', 'disabled'
+  static const String keyAgentMemoryStore = 'agent_memory_store';
+  static const String keyAgentIdleAwarePause = 'agent_idle_aware_pause';
+  static const String keyChatAgentModeEnabled = 'chat_agent_mode_enabled';
 
   // Default Model Config
   static const double defaultTemperature = 0.7;
