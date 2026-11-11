@@ -1103,9 +1103,8 @@ class ChatController extends GetxController {
     final modelName = settings.inferenceMode.value == 'local'
         ? inference.loadedModelName.value
         : settings.selectedCloudModelName;
-    return settings.effectiveSystemPromptForModel(
-      modelName,
-    );
+    final basePrompt = settings.effectiveSystemPromptForModel(modelName);
+    return '$basePrompt${settings.buildReasoningSystemAddendum(modelName)}';
   }
 
   String _attachmentTypeForExtension(String extension) {

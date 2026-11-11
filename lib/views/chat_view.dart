@@ -13,6 +13,7 @@ import '../controllers/home_controller.dart';
 import '../services/cluster_service.dart';
 import '../services/inference_service.dart';
 import '../services/local_image_service.dart';
+import '../services/mesh_distribution_service.dart';
 import '../ffi/sd_ffi_bindings.dart';
 import '../utils/thought_parser.dart';
 import '../widgets/attachment_preview.dart';
@@ -515,10 +516,317 @@ class ChatView extends GetView<ChatController> {
     );
   }
 
-  // ── Model Loading ──
+  // ── Reasoning Effort & Thinking Visibility Modal Sheet ──
+  void _showReasoningEffortSheet(BuildContext context) {
+    final settings = Get.find<SettingsController>();
+    showAppSheet<void>(
+      context,
+      title: 'Model Reasoning Effort & Thinking',
+      subtitle: 'Control how deeply the model thinks before answering and whether its internal reasoning trace is shown.',
+      builder: (ctx) => Obx(() {
+        final t = AppTokens.of(ctx);
+        final currentEffort = settings.reasoningEffort.value;
+        final showReasoning = settings.showModelReasoning.value;
+
+        final tiers = <({String id, String title, String badge, String desc, Color color})>[
+          (
+            id: 'off',
+            title: 'Off · Instant Direct Reply',
+            badge: '0% Latency Penalty',
+            desc: 'Skips internal <think> reasoning and outputs the final answer immediately. Best for casual chat, translation, and quick lookups.',
+            color: t.muted,
+          ),
+          (
+            id: 'low',
+            title: 'Low · Brief Verification',
+            badge: '+30–80 Thinking Tokens',
+            desc: 'Performs a quick 1–3 sentence sanity check before answering. Adds ~1–2 seconds before the answer starts.',
+            color: t.green,
+          ),
+          (
+            id: 'medium',
+            title: 'Medium · Balanced Step-by-Step',
+            badge: '+100–250 Thinking Tokens',
+            desc: 'Structured chain-of-thought for coding, math, and multi-step instructions. Recommended everyday balance.',
+            color: t.accent,
+          ),
+          (
+            id: 'high',
+            title: 'High · Deep Multi-Angle Analysis',
+            badge: '+250–600+ Thinking Tokens',
+            desc: 'Exhaustive breakdown, edge-case testing, and self-correction before writing the final output. Best for hard debugging & architecture.',
+            color: const Color(0xFFAF52DE),
+          ),
+        ];
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Effort Tier Cards
+            for (final tier in tiers) ...[
+              InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => settings.setReasoningEffort(tier.id),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: currentEffort == tier.id
+                        ? tier.color.withValues(alpha: 0.12)
+                        : t.surface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: currentEffort == tier.id
+                          ? tier.color
+                          : t.hairline,
+                      width: currentEffort == tier.id ? 1.4 : 1.0,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            currentEffort == tier.id
+                                ? Icons.radio_button_checked_rounded
+                                : Icons.radio_button_off_rounded,
+                            size: 18,
+                            color: currentEffort == tier.id ? tier.color : t.muted,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              tier.title,
+                              style: t.bodyStrong.copyWith(fontSize: 13.5),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+                            decoration: BoxDecoration(
+                              color: tier.color.withValues(alpha: 0.14),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              tier.badge,
+                              style: t.caption.copyWith(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w700,
+                                color: tier.color,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 5),
+                      Padding(
+                        padding: const EdgeInsets.only(left: 26),
+                        child: Text(
+                          tier.desc,
+                          style: t.caption.copyWith(height: 1.35),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+
+            const SizedBox(height: 4),
+            // Toggle: Show Model Reasoning Trace
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: t.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: t.hairline),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    showReasoning ? Icons.visibility_rounded : Icons.visibility_off_outlined,
+                    size: 20,
+                    color: showReasoning ? t.accent : t.muted,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Show Model Reasoning / Thinking Trace',
+                          style: t.bodyStrong.copyWith(fontSize: 13.5),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Display collapsible <think> blocks above replies so you can inspect how the model arrived at its answer.',
+                          style: t.caption,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Switch.adaptive(
+                    value: showReasoning,
+                    onChanged: (v) => settings.setShowModelReasoning(v),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 14),
+            // INFO-BOX 1: Performance & Memory Penalties
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF59E0B).withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: const Color(0xFFF59E0B).withValues(alpha: 0.35),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.speed_rounded, size: 17, color: Color(0xFFF59E0B)),
+                      const SizedBox(width: 7),
+                      Text(
+                        'Performance & Memory Penalties',
+                        style: t.bodyStrong.copyWith(
+                          fontSize: 12.5,
+                          color: const Color(0xFFF59E0B),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '• Time-to-First-Answer Latency: Higher effort generates 100–600+ thinking tokens before the visible reply begins. At 25 tok/s, High effort adds ~10–20s of thinking time.\n'
+                    '• KV Cache & Context Usage: Reasoning tokens occupy context window slots during generation (use /compact anytime to reclaim memory).\n'
+                    '• Hiding the reasoning trace only hides the UI panel — to eliminate the speed penalty itself, set Effort to Off or Low.',
+                    style: t.caption.copyWith(height: 1.42),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 10),
+            // INFO-BOX 2: Expected Quality Improvements
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: t.accent.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: t.accent.withValues(alpha: 0.35),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.auto_graph_rounded, size: 17, color: t.accent),
+                      const SizedBox(width: 7),
+                      Text(
+                        'What Improvements to Expect',
+                        style: t.bodyStrong.copyWith(
+                          fontSize: 12.5,
+                          color: t.accent,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '• Multi-Step Coding & Debugging: Major reduction in syntax/logic bugs as the model plans function signatures and edge cases first.\n'
+                    '• Math, Logic & Planning: Small local models (1.5B–14B) gain 25–40% higher accuracy on arithmetic and constraint puzzles when allowed to think out loud.\n'
+                    '• Self-Correction: Models catch their own mistaken assumptions inside <think> before committing to the final reply.',
+                    style: t.caption.copyWith(height: 1.42),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      }),
+    );
+  }
+
+  // ── Model Loading & Incoming Mesh Push Bar ──
   Widget _modelLoadingBar(BuildContext context, bool isDark) {
     return Obx(() {
       final inf = Get.find<InferenceService>();
+      final dist = Get.isRegistered<MeshDistributionService>()
+          ? Get.find<MeshDistributionService>()
+          : null;
+      final incoming = dist?.incomingTransfer.value;
+
+      if (incoming != null) {
+        final isDone = incoming.status.startsWith('completed');
+        final isLoading = incoming.status == 'loading';
+        final pct = (incoming.progress * 100).clamp(0, 100).round();
+        final color = isDone ? const Color(0xFF34C759) : _appleBlue(context);
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    isDone
+                        ? Icons.check_circle_rounded
+                        : (isLoading ? Icons.memory_rounded : Icons.downloading_rounded),
+                    size: 15,
+                    color: color,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      isDone
+                          ? 'Model push complete & loaded: ${incoming.modelName}'
+                          : (isLoading
+                              ? 'Loading pushed model: ${incoming.modelName}…'
+                              : 'Receiving model push: ${incoming.modelName} (${incoming.peerName})'),
+                      style: GoogleFonts.inter(
+                        fontSize: 12.5,
+                        color: isDark ? Colors.white : Colors.black87,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  if (!isDone)
+                    Text(
+                      incoming.speedMBps > 0
+                          ? '$pct% · ${incoming.speedMBps.toStringAsFixed(1)} MB/s'
+                          : '$pct%',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: color,
+                        fontWeight: FontWeight.w600,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: LinearProgressIndicator(
+                  value: isLoading ? null : incoming.progress.clamp(0.0, 1.0),
+                  backgroundColor: _sep(context),
+                  color: color,
+                  minHeight: 3.5,
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+
       if (!inf.isLoadingModel.value) return const SizedBox.shrink();
       final pct = (inf.modelLoadProgress.value * 100).round();
       return Padding(
@@ -587,10 +895,40 @@ class ChatView extends GetView<ChatController> {
           )
         else ...[
           if (parts.hasThought)
-            ThoughtDisclosure(
-                thought: parts.thought,
-                isThinking: parts.isThinking,
-                styleSheet: _thoughtMd(context, isDark)),
+            Obx(() {
+              final settings = Get.find<SettingsController>();
+              if (!settings.showModelReasoning.value) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        parts.isThinking
+                            ? Icons.psychology_alt_rounded
+                            : Icons.visibility_off_outlined,
+                        size: 14,
+                        color: Theme.of(context).hintColor,
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        parts.isThinking
+                            ? 'Reasoning in background (hidden)…'
+                            : 'Reasoning trace hidden',
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          color: Theme.of(context).hintColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+              return ThoughtDisclosure(
+                  thought: parts.thought,
+                  isThinking: parts.isThinking,
+                  styleSheet: _thoughtMd(context, isDark));
+            }),
           if (_hasPrintable(answer))
             Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
               Expanded(
@@ -896,6 +1234,104 @@ class ChatView extends GetView<ChatController> {
                         minimumSize: const Size(0, 32),
                       ),
                       child: const Text('Start Batch'),
+                    ),
+                  ],
+                ),
+              );
+            }),
+            // Reasoning Effort & Thinking Visibility Control Bar
+            Obx(() {
+              final settings = Get.find<SettingsController>();
+              final effort = settings.reasoningEffort.value;
+              final showReasoning = settings.showModelReasoning.value;
+              final effortLabel = switch (effort) {
+                'off' => 'Off · Instant',
+                'low' => 'Low · Fast',
+                'high' => 'High · Deep',
+                _ => 'Medium · Balanced',
+              };
+              final effortColor = switch (effort) {
+                'off' => Theme.of(context).hintColor,
+                'low' => const Color(0xFF34C759),
+                'high' => const Color(0xFFAF52DE),
+                _ => _appleBlue(context),
+              };
+
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(4, 0, 4, 7),
+                child: Row(
+                  children: [
+                    InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => _showReasoningEffortSheet(context),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: effortColor.withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: effortColor.withValues(alpha: 0.30),
+                            width: 0.8,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.psychology_rounded, size: 14, color: effortColor),
+                            const SizedBox(width: 5),
+                            Text(
+                              'Effort: $effortLabel',
+                              style: GoogleFonts.inter(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w600,
+                                color: effortColor,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Icon(Icons.info_outline_rounded, size: 12.5, color: effortColor),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => settings.setShowModelReasoning(!showReasoning),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: isDark
+                              ? Colors.white.withValues(alpha: 0.05)
+                              : Colors.black.withValues(alpha: 0.04),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: _sep(context), width: 0.8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              showReasoning
+                                  ? Icons.visibility_rounded
+                                  : Icons.visibility_off_outlined,
+                              size: 13.5,
+                              color: showReasoning
+                                  ? _appleBlue(context)
+                                  : Theme.of(context).hintColor,
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              showReasoning ? 'Thinking: Shown' : 'Thinking: Hidden',
+                              style: GoogleFonts.inter(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w500,
+                                color: showReasoning
+                                    ? (isDark ? Colors.white : Colors.black87)
+                                    : Theme.of(context).hintColor,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ],
                 ),

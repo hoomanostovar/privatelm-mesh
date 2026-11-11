@@ -427,6 +427,10 @@ class MeshDiscoveryService extends GetxService {
       final isFirstSeen = !onlineNodes.containsKey(node.id);
       onlineNodes[node.id] = node;
 
+      if (Get.isRegistered<ClusterService>()) {
+        unawaited(Get.find<ClusterService>().syncDiscoveredPeer(node));
+      }
+
       // Immediately send a direct unicast reply back to the sender if this wasn't
       // already a reply (or if we just discovered this peer for the first time).
       // This guarantees two-way visibility between PC and Phone as soon as a

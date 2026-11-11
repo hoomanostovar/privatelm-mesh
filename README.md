@@ -21,15 +21,16 @@ PrivateLM-Mesh is **completely self-contained and zero-setup**: all native infer
 
 ## 🚀 Key Features
 
-### 🌐 Decentralized Peer-to-Peer Mesh Network
+### 🌐 Hierarchy-Free Unified Peer-to-Peer Mesh Network
+- **Equal-Peer Resource Pooling (No Dedicated Master Required)**: Every device in **Unified Mesh Pool** mode automatically contributes its local memory/compute (`rpc-server` on port `50052`) *and* can orchestrate models across the entire mesh when you interact with its UI (`llama-server` on port `50051`).
+- **Instant Mode Switching (No App Restart Needed)**: Seamlessly switch between **Unified Mesh Pool**, **Passive Worker**, and **Local Only** at any time without restarting the application.
+- **Sci-Fi HUD Memory & Model Allocation Visualizer**: Interactive real-time reactor HUD showing each device's proportional memory chamber relative to the total mesh pool, animated model fill (`TweenAnimationBuilder` + custom scanline shaders), exact GB usage, `% of model`, and assigned transformer layer ranges (`L00–L24`). Includes an interactive model selector strip and solo-node peer simulator.
 - **Zero-Config LAN/Wi-Fi Discovery**: Nodes announce capability heartbeats every 4 seconds over UDP port `50053`. Automatic `/24` subnet unicast sweep guarantees discovery even across Wi-Fi/Ethernet router bridges and Android sleep locks.
-- **Interactive Radar Scanner**: Visual 21st.dev-inspired radar display tracking all online cluster nodes, ping latencies, and device transport types in real time.
-- **Dynamic Memory Pooling**: Automatically aggregates available VRAM and RAM across active nodes (`M_pool = ∑ VRAM_i + RAM_free_i`) and calculates whether your mesh can host 3B, 7B, 14B, 32B, or 70B models.
 
-### 📦 Automated One-Click P2P Model Distribution
-- **Direct P2P Model Sync**: Select any downloaded model on your primary device, mark target mesh nodes, and press **Distribute**. The model streams directly between devices over high-speed local Wi-Fi / Ethernet without eating internet bandwidth.
-- **Auto-Sync on Mesh Join**: Newly connected phones, laptops, or PCs entering your local network can instantly join the cluster and auto-sync the active working model.
-- **Smart Fallback**: If a peer node temporarily disconnects or experiences network interruptions, it seamlessly falls back to direct resume-capable origin fetching.
+### 📦 Automated One-Click P2P Model Distribution & Live Push Telemetry
+- **Direct P2P Model Sync**: Select any downloaded model on your device, mark target mesh nodes, and press **Distribute**. The model streams directly between devices over high-speed local Wi-Fi / Ethernet.
+- **Receiving-Client Push Notifications & Auto-Load Confirmation**: Receiving clients immediately display an incoming transfer toast and live progress banner (`%` and `MB/s` throughput) in both the Chat and Mesh views, automatically refresh and load the pushed model into memory upon completion, and send a `sync-ack` confirmation back to the sender.
+- **Auto-Sync on Mesh Join & Smart Fallback**: Newly connected devices can auto-sync the active working model, with automatic fallback to resume-capable origin fetching if interrupted.
 
 ### ⚡ Heterogeneous Multi-GPU & CPU Layer Splitting (`ggml-rpc`)
 - **Heterogeneous Compute**: Divide transformer model layers seamlessly across NVIDIA GeForce RTX (CUDA/DirectML), Apple Silicon (Metal), Android smartphones (Vulkan/NEON), and Linux servers.
@@ -40,8 +41,9 @@ PrivateLM-Mesh is **completely self-contained and zero-setup**: all native infer
 - **Bento Telemetry Cards**: Live tracking of mesh tokens generated, aggregate throughput (tokens/second), individual device uptime, real-time power draw (watts), and compute efficiency (tokens/watt).
 - **Multi-Power-Tier Mesh Benchmark**: Built-in benchmark suite to stress-test your mesh cluster across 4 power profiles (**Eco, Balanced, Performance, Extreme**) to calculate maximum tokens/sec, KV cache throughput, and thermal headroom.
 
-### 🧠 Intelligent Context Compaction (`/compact`) & Chat Workflow
-- **DeepSeek & Claude-Inspired Compaction**: Condenses lengthy conversations into a structured `<CONTEXT_SUMMARY>` covering *Primary Objectives*, *Key Constraints & User Decisions*, *Technical Context & Files*, and *Current State & Tasks*. Preserves recent active turns verbatim while purging native KV cache on the inference engine to restore speed.
+### 🧠 Reasoning Effort Controls, Context Compaction (`/compact`) & Chat Workflow
+- **Selectable Model Reasoning Effort & Thinking Visibility**: Choose between **Off (Instant)**, **Low (Brief)**, **Medium (Balanced)**, and **High (Deep)** reasoning effort right from the Chat composer, and toggle `<think>...</think>` trace visibility on or off. Includes built-in educational info-boxes detailing **Performance & Memory Penalties** (time-to-first-answer latency and KV cache usage) and **Expected Quality Improvements** (multi-step coding, math, logic, and self-correction).
+- **DeepSeek & Claude-Inspired Compaction (`/compact`)**: Condenses lengthy conversations into a structured `<CONTEXT_SUMMARY>` covering *Primary Objectives*, *Key Constraints & User Decisions*, *Technical Context & Files*, and *Current State & Tasks*. Preserves recent active turns verbatim while purging native KV cache on the inference engine to restore speed.
 - **Dual-Engine Execution**: High-intelligence semantic summarization when models are loaded, backed by a deterministic, zero-failure pure-Dart heuristic compactor when offline.
 - **Seamless Text Selection & Block Copying**: Unified continuous text selection across paragraphs and bubbles via Flutter `SelectionArea`, single-click copy buttons for prompt/replies, and syntax-styled code cards with language tags and copy actions.
 - **Fail-Safe Offline RPC Protection**: Pre-flight socket health probing automatically detects offline cluster nodes, falling back gracefully to local compute without `0xC0000409` crash exits.

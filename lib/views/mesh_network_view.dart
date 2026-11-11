@@ -19,6 +19,7 @@ import '../services/mesh_benchmark_service.dart';
 import '../services/mesh_distribution_service.dart';
 import '../services/mesh_discovery_service.dart';
 import '../services/mesh_telemetry_service.dart';
+import '../widgets/mesh_allocation_visualizer.dart';
 import '../widgets/mesh_ui_components.dart';
 import '../widgets/option_info_sheet.dart';
 
@@ -260,14 +261,26 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
     final peers = mesh.peerNodes;
     final totalNodes = peers.length + 1;
     final offered = distribution.meshOfferedModel.value;
+    final incoming = distribution.incomingTransfer.value;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
       children: [
+        if (incoming != null) ...[
+          _buildIncomingTransferBanner(context, incoming),
+          const SizedBox(height: 12),
+        ],
         if (offered != null) ...[
           _buildOfferedModelBanner(context, offered),
           const SizedBox(height: 12),
         ],
+
+        // Sci-Fi Game HUD Mesh Memory & Model Allocation Visualizer
+        MeshAllocationVisualizer(
+          cluster: cluster,
+          discovery: mesh,
+        ),
+        const SizedBox(height: 14),
 
         // 21st.dev Radar Scanner
         MeshRadarScanner(
@@ -433,6 +446,76 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
     );
   }
 
+  Widget _buildIncomingTransferBanner(BuildContext context, PeerDistributionProgress incoming) {
+    final t = AppTokens.of(context);
+    final isDone = incoming.status.startsWith('completed');
+    final isLoading = incoming.status == 'loading';
+    final pct = (incoming.progress * 100).clamp(0, 100).round();
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: (isDone ? t.green : t.accent).withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: (isDone ? t.green : t.accent).withValues(alpha: 0.45),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                isDone
+                    ? Icons.check_circle_rounded
+                    : (isLoading ? Icons.memory_rounded : Icons.downloading_rounded),
+                color: isDone ? t.green : t.accent,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  isDone
+                      ? 'Model Push Complete: ${incoming.modelName}'
+                      : (isLoading
+                          ? 'Loading Pushed Model: ${incoming.modelName}...'
+                          : 'Receiving Model Push: ${incoming.modelName} ($pct%)'),
+                  style: t.bodyStrong.copyWith(fontSize: 13),
+                ),
+              ),
+              if (!isDone && incoming.speedMBps > 0)
+                Text(
+                  '${incoming.speedMBps.toStringAsFixed(1)} MB/s',
+                  style: t.caption.copyWith(
+                    color: t.accent,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            isDone
+                ? '${incoming.peerName} · Ready & active in memory'
+                : '${incoming.peerName} · Status: ${incoming.status.toUpperCase()}',
+            style: t.caption,
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: isLoading ? null : incoming.progress.clamp(0.0, 1.0),
+              minHeight: 6,
+              backgroundColor: t.surface,
+              valueColor: AlwaysStoppedAnimation<Color>(isDone ? t.green : t.accent),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildClusterRoleAndControls(BuildContext context) {
     final t = AppTokens.of(context);
     final role = cluster.role;
@@ -444,10 +527,27 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
         children: [
           Row(
             children: [
-              Icon(Icons.memory_rounded, size: 18, color: t.accent),
+              Icon(Icons.hub_rounded, size: 18, color: t.accent),
               const SizedBox(width: 8),
               Expanded(
-                child: Text('This Device\'s Mesh Role', style: t.bodyStrong.copyWith(fontSize: 13.5)),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Mesh Operating Mode (Instant Switch · No Restart)',
+                      style: t.bodyStrong.copyWith(fontSize: 13.5),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      role == ClusterRole.master
+                          ? 'Unified Peer-to-Peer Pool: All devices share memory automatically; interact from any device.'
+                          : role == ClusterRole.worker
+                              ? 'Passive Worker: Lending memory & compute to peers; tap any mode above to switch immediately.'
+                              : 'Standalone Local: Running models on this device only.',
+                      style: t.caption.copyWith(color: t.muted, fontSize: 11.5),
+                    ),
+                  ],
+                ),
               ),
               OptionInfoIcon(
                 onTap: () => showOptionHelpByKey(context, 'cluster_role'),
@@ -458,13 +558,13 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
           AppSegmented<ClusterRole>(
             selected: role,
             items: const [
-              (ClusterRole.off, 'Standalone'),
-              (ClusterRole.master, 'Master'),
-              (ClusterRole.worker, 'Worker'),
+              (ClusterRole.off, 'Local Only'),
+              (ClusterRole.master, 'Unified Mesh Pool'),
+              (ClusterRole.worker, 'Passive Worker'),
             ],
             onChanged: (r) => cluster.setRole(r),
           ),
-          if (role == ClusterRole.worker) ...[
+          if (role == ClusterRole.worker || role == ClusterRole.master) ...[
             const SizedBox(height: 10),
             Container(
               padding: const EdgeInsets.all(10),
@@ -480,11 +580,18 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
                   Expanded(
                     child: Text(
                       cluster.worker.value.running
-                          ? 'Worker RPC active on ${cluster.wifiAddress.value ?? "0.0.0.0"}:50052'
-                          : 'Starting Worker RPC listener on port 50052...',
+                          ? (role == ClusterRole.master
+                              ? 'Unified Mesh Active: Local RPC daemon sharing on ${cluster.wifiAddress.value ?? "0.0.0.0"}:50052 + Coordinating ${cluster.workers.length} peer(s)'
+                              : 'Passive Worker RPC active on ${cluster.wifiAddress.value ?? "0.0.0.0"}:50052')
+                          : 'Starting local RPC mesh daemon on port 50052...',
                       style: t.caption.copyWith(fontWeight: FontWeight.w600),
                     ),
                   ),
+                  if (role == ClusterRole.worker)
+                    PillButton(
+                      label: 'Exit Worker',
+                      onPressed: () => cluster.setRole(ClusterRole.master),
+                    ),
                 ],
               ),
             ),

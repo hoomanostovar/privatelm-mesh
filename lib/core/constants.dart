@@ -82,6 +82,8 @@ class AppConstants {
   static const String keyFontScale = 'font_scale';
   static const String keyBatchModeWarningAccepted =
       'batch_mode_warning_accepted';
+  static const String keyReasoningEffort = 'reasoning_effort'; // 'off', 'low', 'medium', 'high'
+  static const String keyShowModelReasoning = 'show_model_reasoning';
 
   // Default Model Config
   static const double defaultTemperature = 0.7;

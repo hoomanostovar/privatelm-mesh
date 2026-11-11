@@ -70,6 +70,12 @@ class SettingsController extends GetxController {
   final hapticsEnabled = true.obs;
   final appVersion = '1.1.5'.obs;
 
+  /// Model reasoning effort level: 'off', 'low', 'medium', 'high'
+  final reasoningEffort = 'medium'.obs;
+
+  /// Whether to display the model's <think>...</think> reasoning trace in chat bubbles
+  final showModelReasoning = true.obs;
+
   // Persistent text controllers for settings fields
   final openaiKeyController = TextEditingController();
   final anthropicKeyController = TextEditingController();
@@ -261,6 +267,8 @@ class SettingsController extends GetxController {
     final savedStrat = _hive.getSetting<String>(AppConstants.keyClusterSchedulerStrategy);
     clusterSchedulerStrategy.value = ClusterSchedulerStrategyExt.fromString(savedStrat);
     adbAutoBridge.value = _hive.getSetting<bool>(AppConstants.keyAdbAutoBridge, defaultValue: true) ?? true;
+    reasoningEffort.value = _hive.getSetting<String>(AppConstants.keyReasoningEffort, defaultValue: 'medium') ?? 'medium';
+    showModelReasoning.value = _hive.getSetting<bool>(AppConstants.keyShowModelReasoning, defaultValue: true) ?? true;
 
     // Sync controllers with loaded values
     openaiKeyController.text = openaiKey.value;
@@ -853,6 +861,37 @@ class SettingsController extends GetxController {
     final clamped = value.clamp(0.8, 1.4);
     fontScale.value = clamped;
     await _hive.setSetting(AppConstants.keyFontScale, clamped);
+  }
+
+  Future<void> setReasoningEffort(String effort) async {
+    const valid = {'off', 'low', 'medium', 'high'};
+    final normalized = valid.contains(effort) ? effort : 'medium';
+    reasoningEffort.value = normalized;
+    Haptics.selectionClick();
+    await _hive.setSetting(AppConstants.keyReasoningEffort, normalized);
+  }
+
+  Future<void> setShowModelReasoning(bool value) async {
+    showModelReasoning.value = value;
+    Haptics.selectionClick();
+    await _hive.setSetting(AppConstants.keyShowModelReasoning, value);
+  }
+
+  /// Builds the system-prompt addendum or control directive corresponding to the
+  /// selected reasoning effort level (`off`, `low`, `medium`, `high`).
+  String buildReasoningSystemAddendum([String modelName = '']) {
+    final effort = reasoningEffort.value;
+    switch (effort) {
+      case 'off':
+        return '\n[Reasoning Effort: OFF] Respond directly and concisely with the final answer. Do not emit <think> blocks or internal chain-of-thought.';
+      case 'low':
+        return '\n[Reasoning Effort: LOW] Before answering non-trivial questions, enclose a brief 1-3 sentence check inside <think>...</think> tags, then provide your answer.';
+      case 'high':
+        return '\n[Reasoning Effort: HIGH] Before answering, perform a thorough, multi-step analysis inside <think>...</think> tags: break down requirements, verify edge cases, check math/code logic, and self-correct any assumptions before writing the final response.';
+      case 'medium':
+      default:
+        return '\n[Reasoning Effort: MEDIUM] For coding, math, or multi-step questions, think step-by-step inside <think>...</think> tags before giving your final answer.';
+    }
   }
 
   Future<void> setThemeMode(ThemeMode mode) async {

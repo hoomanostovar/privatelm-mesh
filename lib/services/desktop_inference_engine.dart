@@ -342,6 +342,17 @@ class DesktopInferenceEngine {
 
     // Pre-flight check for RPC endpoints: verify workers are actually alive before passing to llama-server.
     // If an unreachable RPC endpoint is passed to llama-server, ggml-rpc aborts and crashes the entire process.
+    // Also filter out this machine's own IP addresses so Unified Mesh nodes never connect to their own rpc-server.
+    final localIps = <String>{'127.0.0.1', 'localhost', '0.0.0.0'};
+    try {
+      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          localIps.add(addr.address);
+        }
+      }
+    } catch (_) {}
+
     final verifiedRpcEndpoints = <String>[];
     if (rpcEndpoints != null && rpcEndpoints.isNotEmpty) {
       for (final ep in rpcEndpoints) {
@@ -349,6 +360,10 @@ class DesktopInferenceEngine {
           final parts = ep.split(':');
           final host = parts[0];
           final portNum = parts.length > 1 ? (int.tryParse(parts[1]) ?? 50052) : 50052;
+          // Skip self-loopback on default local RPC port 50052 (keep ADB USB forwarded ports like 127.0.0.1:50055+)
+          if (localIps.contains(host) && portNum == 50052) {
+            continue;
+          }
           final socket = await Socket.connect(host, portNum, timeout: const Duration(milliseconds: 500));
           socket.destroy();
           verifiedRpcEndpoints.add(ep);

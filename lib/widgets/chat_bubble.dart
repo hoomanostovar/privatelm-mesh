@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../controllers/settings_controller.dart';
 import '../models/chat_message.dart';
 import '../utils/thought_parser.dart';
 import 'attachment_preview.dart';
@@ -133,11 +135,43 @@ class ChatBubble extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (thoughtParts.hasThought)
-          ThoughtDisclosure(
-            thought: thoughtParts.thought,
-            durationSeconds: message.thoughtDurationSeconds,
-            styleSheet: _thoughtMarkdownStyle(context),
-          ),
+          Get.isRegistered<SettingsController>()
+              ? Obx(() {
+                  final settings = Get.find<SettingsController>();
+                  if (!settings.showModelReasoning.value) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: () => settings.setShowModelReasoning(true),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.visibility_off_outlined, size: 13, color: muted),
+                              const SizedBox(width: 5),
+                              Text(
+                                'Reasoning trace hidden · Tap to show',
+                                style: TextStyle(fontSize: 11.5, color: muted),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+                  return ThoughtDisclosure(
+                    thought: thoughtParts.thought,
+                    durationSeconds: message.thoughtDurationSeconds,
+                    styleSheet: _thoughtMarkdownStyle(context),
+                  );
+                })
+              : ThoughtDisclosure(
+                  thought: thoughtParts.thought,
+                  durationSeconds: message.thoughtDurationSeconds,
+                  styleSheet: _thoughtMarkdownStyle(context),
+                ),
         if (answerContent.isNotEmpty)
           MarkdownBody(
             data: answerContent,

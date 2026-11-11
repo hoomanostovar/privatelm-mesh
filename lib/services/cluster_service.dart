@@ -12,12 +12,51 @@ import 'package:llama_flutter_android/llama_flutter_android.dart';
 
 import '../core/constants.dart';
 import '../core/ui.dart';
+import '../models/hardware_acceleration.dart';
 import '../models/transport_type.dart';
 import 'adb_bridge_service.dart';
 import 'app_log_service.dart';
+import 'device_info_service.dart';
 import 'hive_service.dart';
 import 'mesh_discovery_service.dart';
 import 'network_transport_service.dart';
+
+/// Represents one device's proportional memory capacity and model allocation in the mesh.
+class MeshDeviceSlice {
+  final String id;
+  final String name;
+  final String deviceType;
+  final String hardwareBackend;
+  final TransportType transportType;
+  final double latencyMs;
+  final double capacityMb;
+  final double assignedModelMb;
+  final double poolShareFraction; // Device capacity / Total mesh capacity
+  final double modelFraction; // Assigned model MB / Total model MB
+  final double memoryUtilization; // Assigned model MB / Device capacity
+  final int layerStart;
+  final int layerEnd;
+  final bool isLocal;
+
+  const MeshDeviceSlice({
+    required this.id,
+    required this.name,
+    required this.deviceType,
+    required this.hardwareBackend,
+    required this.transportType,
+    required this.latencyMs,
+    required this.capacityMb,
+    required this.assignedModelMb,
+    required this.poolShareFraction,
+    required this.modelFraction,
+    required this.memoryUtilization,
+    required this.layerStart,
+    required this.layerEnd,
+    this.isLocal = false,
+  });
+
+  int get assignedLayers => assignedModelMb > 0 ? math.max(1, layerEnd - layerStart) : 0;
+}
 
 /// What this node does in the heterogeneous mesh cluster.
 enum ClusterRole {
@@ -73,8 +112,9 @@ class ClusterService extends GetxService {
   /// Running a model across workers: supported on Android, Windows, Linux, and macOS.
   static bool get canBeMaster => !kIsWeb;
 
-  /// iOS and desktop apps stop the worker when closed unless run as an external daemon.
-  static bool get workerStopsWithApp => !kIsWeb && (Platform.isIOS || Platform.isMacOS || Platform.isWindows);
+  /// Only iOS runs an in-process worker thread that cannot be cancelled without closing the app.
+  /// Windows, macOS, Linux, and Android run a stoppable worker subprocess/service.
+  static bool get workerStopsWithApp => !kIsWeb && Platform.isIOS;
 
   /// QR codes a worker shows: privatelm://worker?host=…&port=…
   static const _qrScheme = 'privatelm';
@@ -85,8 +125,16 @@ class ClusterService extends GetxService {
   /// Workers the master can use on its next GGUF load.
   final workers = <ClusterWorker>[].obs;
 
-  /// Master mode: use [workers] when loading GGUF models.
+  /// Peer IDs or hosts manually unpaired by the user so auto-pool won't re-add them automatically.
+  final Set<String> _manuallyExcludedHosts = <String>{};
+
+  /// Unified Mesh Pool enabled: pool all mesh devices & use workers when loading GGUF models.
   final enabled = false.obs;
+
+  /// When true, this device is in dedicated passive worker-only mode.
+  /// When false and [enabled] is true, this device is in Unified Peer-to-Peer Mesh mode
+  /// (both contributing its own RPC worker daemon AND able to orchestrate models from its UI).
+  final dedicatedWorkerOnly = false.obs;
 
   final found = <ClusterWorker>[].obs;
   final isScanning = false.obs;
@@ -111,11 +159,12 @@ class ClusterService extends GetxService {
   double? _localSpeed;
   Timer? _statusTimer;
 
-  ClusterRole get role => _workerRequested.value || worker.value.running
-      ? ClusterRole.worker
-      : enabled.value
-          ? ClusterRole.master
-          : ClusterRole.off;
+  ClusterRole get role {
+    if (dedicatedWorkerOnly.value) return ClusterRole.worker;
+    if (enabled.value) return ClusterRole.master;
+    if (_workerRequested.value || worker.value.running) return ClusterRole.worker;
+    return ClusterRole.off;
+  }
 
   /// "Pixel 8 72% · POCO F1 28%", or null when the model isn't split.
   String? get splitSummary {
@@ -147,7 +196,12 @@ class ClusterService extends GetxService {
         DeviceInfoPlugin().linuxInfo.then((info) => deviceName = info.name);
       }
       refreshWorkerStatus().then((_) {
-        if (worker.value.running) _watchWorker();
+        if (worker.value.running) {
+          _watchWorker();
+        } else if (enabled.value) {
+          // In Unified Mesh mode, automatically start the local RPC worker listener so peers can pool our memory too.
+          startWorker();
+        }
       });
       // A worker runs at full speed only while PrivateLM is on screen (it
       // borrows the app's priority), so keep the screen on while sharing.
@@ -177,15 +231,31 @@ class ClusterService extends GetxService {
 
   Future<void> setRole(ClusterRole next) async {
     if (next == role) return;
-    if (next != ClusterRole.worker && role == ClusterRole.worker) {
-      if (workerStopsWithApp) {
-        showToast('Still sharing', 'Close PrivateLM to stop sharing this device.');
-        return;
+    if (next == ClusterRole.off) {
+      if (worker.value.running || _workerRequested.value) {
+        if (workerStopsWithApp) {
+          showToast('Still sharing', 'Close PrivateLM to stop sharing this device.');
+          return;
+        }
+        await stopWorker();
       }
-      await stopWorker();
+      dedicatedWorkerOnly.value = false;
+      await _setEnabled(false);
+    } else if (next == ClusterRole.master) {
+      // Unified Mesh Pool: participate as both a peer worker AND an active model coordinator
+      dedicatedWorkerOnly.value = false;
+      await _setEnabled(true);
+      if (!worker.value.running && !_workerRequested.value) {
+        await startWorker();
+      }
+    } else if (next == ClusterRole.worker) {
+      // Passive Dedicated Worker mode: contribute resources only
+      dedicatedWorkerOnly.value = true;
+      await _setEnabled(false);
+      if (!worker.value.running) {
+        await startWorker();
+      }
     }
-    await _setEnabled(next == ClusterRole.master);
-    if (next == ClusterRole.worker) await startWorker();
     await refreshWifiAddress();
   }
 
@@ -320,6 +390,7 @@ class ClusterService extends GetxService {
 
   /// Adds a peer node discovered via Mesh UDP Beacon, automatically waking its worker service if needed.
   Future<String?> addMeshNode(MeshNode node) async {
+    _manuallyExcludedHosts.remove(node.host);
     // Request remote node to ensure its worker service is running
     try {
       await http
@@ -422,11 +493,40 @@ class ClusterService extends GetxService {
   }
 
   Future<void> remove(ClusterWorker w) async {
-    workers.removeWhere((s) => s.endpoint == w.endpoint);
+    _manuallyExcludedHosts.add(w.host);
+    workers.removeWhere((s) => s.endpoint == w.endpoint || s.host == w.host);
     await _save();
   }
 
-  bool isAdded(ClusterWorker w) => workers.any((s) => s.endpoint == w.endpoint);
+  /// Automatically synchronizes a discovered LAN peer into the unified mesh pool
+  /// when Mesh Pool mode is enabled, unless the user explicitly excluded it.
+  Future<void> syncDiscoveredPeer(MeshNode node) async {
+    if (!enabled.value || dedicatedWorkerOnly.value) return;
+    if (_manuallyExcludedHosts.contains(node.host)) return;
+    if (node.host == wifiAddress.value || node.host == '127.0.0.1' || node.host == 'localhost') return;
+
+    final existingIdx = workers.indexWhere((w) => w.host == node.host || (w.id != null && w.id == node.id));
+    final updatedWorker = ClusterWorker(
+      name: node.name,
+      host: node.host,
+      port: node.port,
+      ramMb: (node.freeRamGB * 1024).round(),
+      model: '${node.deviceType} ${node.gpuName.isNotEmpty ? "(${node.gpuName})" : ""}'.trim(),
+      id: node.id,
+      deviceType: node.deviceType,
+      transportType: node.transportType,
+      hardwareBackend: node.hardwareBackend,
+      latencyMs: 5.0,
+    );
+    if (existingIdx >= 0) {
+      workers[existingIdx] = updatedWorker;
+    } else {
+      workers.add(updatedWorker);
+      await _save();
+    }
+  }
+
+  bool isAdded(ClusterWorker w) => workers.any((s) => s.endpoint == w.endpoint || s.host == w.host);
 
   /// Looks for workers on the Wi-Fi or LAN.
   Future<void> scanNearby() async {
@@ -655,6 +755,11 @@ class ClusterService extends GetxService {
   /// mapped file and the CPU's repacked copy of the same weights).
   Future<void> refreshSplit(String modelPath) async {
     final buffers = await LlamaCluster.lastLoadBuffers();
+    if (buffers.isEmpty && split.isNotEmpty) {
+      // On Desktop, llama-server runs in a separate process and applyForNextLoad
+      // already populated the exact split shares.
+      return;
+    }
     final remote = <String, double>{};
     for (final b in buffers) {
       final open = b.name.indexOf('[');
@@ -670,6 +775,131 @@ class ClusterService extends GetxService {
           math.max(0, fileMb - remoteMb), isThisPhone: true),
       for (final e in remote.entries) ClusterShare(e.key, e.value),
     ]);
+  }
+
+  /// Computes a proportional memory & model layer allocation across all active mesh devices
+  /// (local coordinator + paired/discovered mesh peers) for a given model size in MB.
+  /// Used by the Sci-Fi Mesh Allocation Visualizer to animate how any selected model
+  /// fits into each device's memory pool.
+  List<MeshDeviceSlice> computeMeshAllocation({
+    required double modelSizeMb,
+    int totalLayers = 32,
+    double? localCapacityOverrideMb,
+  }) {
+    final devService = Get.isRegistered<DeviceInfoService>() ? Get.find<DeviceInfoService>() : null;
+    final discovery = Get.isRegistered<MeshDiscoveryService>() ? Get.find<MeshDiscoveryService>() : null;
+
+    final localFreeGb = devService?.availableRamGB.value ?? 8.0;
+    final localCapMb = localCapacityOverrideMb ?? math.max(1024.0, localFreeGb * 1024 * 0.78);
+    final localHw = devService != null && devService.gpuName.value.isNotEmpty
+        ? '${devService.recommendedBackend.displayName} · ${devService.gpuName.value}'
+        : (devService?.recommendedBackend.displayName ?? 'Local GPU/CPU');
+    final localType = !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux) ? 'PC' : 'Phone';
+
+    // Gather unique peer nodes from paired workers + discovered active LAN nodes
+    final peerWorkers = <ClusterWorker>[...workers];
+    if (discovery != null) {
+      for (final m in discovery.peerNodes) {
+        if (m.host == wifiAddress.value || m.host == '127.0.0.1') continue;
+        if (_manuallyExcludedHosts.contains(m.host)) continue;
+        final already = peerWorkers.any((w) => w.host == m.host || (w.id != null && w.id == m.id));
+        if (!already) {
+          peerWorkers.add(ClusterWorker(
+            name: m.name,
+            host: m.host,
+            port: m.port,
+            ramMb: (m.freeRamGB * 1024).round(),
+            model: '${m.deviceType} ${m.gpuName.isNotEmpty ? "(${m.gpuName})" : ""}'.trim(),
+            id: m.id,
+            deviceType: m.deviceType,
+            transportType: m.transportType,
+            hardwareBackend: m.hardwareBackend,
+            latencyMs: 6.0,
+          ));
+        }
+      }
+    }
+
+    final masterAlloc = ClusterNodeAllocation(
+      worker: null,
+      capacityMb: localCapMb,
+      speed: _localSpeed ?? 18.0,
+      transportType: TransportType.unknown,
+      latencyMs: 0.0,
+    );
+
+    final allocations = <ClusterNodeAllocation>[
+      masterAlloc,
+      if (enabled.value || peerWorkers.isNotEmpty)
+        for (final w in peerWorkers)
+          ClusterNodeAllocation(
+            worker: w,
+            capacityMb: math.max(512.0, (w.ramMb ?? 4096) * 0.78),
+            speed: w.bandwidth ?? _unknownSpeed,
+            transportType: TransportTypeExt.fromString(w.transportType),
+            latencyMs: w.latencyMs ?? 8.0,
+          ),
+    ];
+
+    final needMb = modelSizeMb * 1.1; // Include ~10% KV cache & compute buffer overhead
+    final strategy = schedulerStrategy.value;
+    switch (strategy) {
+      case ClusterSchedulerStrategy.topologyLatency:
+        _fillTopologyAware(allocations, needMb);
+        break;
+      case ClusterSchedulerStrategy.throughputWeighted:
+        _splitBySpeed(allocations, needMb);
+        break;
+      case ClusterSchedulerStrategy.capacityBalanced:
+        _fillFastestFirst(allocations, needMb);
+        break;
+    }
+
+    final totalPoolMb = allocations.fold<double>(0.0, (sum, n) => sum + n.capacityMb);
+    final totalAssignedMb = allocations.fold<double>(0.0, (sum, n) => sum + n.assignedMb);
+
+    final slices = <MeshDeviceSlice>[];
+    var currentLayer = 0;
+
+    for (var i = 0; i < allocations.length; i++) {
+      final node = allocations[i];
+      final w = node.worker;
+      final isLocal = w == null;
+      final shareOfPool = totalPoolMb > 0 ? (node.capacityMb / totalPoolMb).clamp(0.05, 1.0) : 1.0;
+      final shareOfModel = needMb > 0
+          ? (node.assignedMb / needMb).clamp(0.0, 1.0)
+          : (totalAssignedMb > 0 ? (node.assignedMb / totalAssignedMb).clamp(0.0, 1.0) : 0.0);
+      final util = node.capacityMb > 0 ? (node.assignedMb / node.capacityMb).clamp(0.0, 1.0) : 0.0;
+
+      int layerCount = 0;
+      if (node.assignedMb > 0 && totalAssignedMb > 0) {
+        layerCount = math.max(1, ((node.assignedMb / totalAssignedMb) * totalLayers).round());
+      }
+      final startLayer = currentLayer;
+      final endLayer = node.assignedMb > 0 ? math.min(totalLayers, startLayer + layerCount) : startLayer;
+      currentLayer = endLayer;
+
+      slices.add(MeshDeviceSlice(
+        id: isLocal ? 'local' : (w.id ?? w.endpoint),
+        name: isLocal
+            ? (deviceName.isNotEmpty ? '$deviceName (This Device)' : 'This Device (Local Core)')
+            : w.name,
+        deviceType: isLocal ? localType : (w.deviceType ?? 'Node'),
+        hardwareBackend: isLocal ? localHw : (w.hardwareBackend ?? 'Auto'),
+        transportType: isLocal ? TransportType.unknown : node.transportType,
+        latencyMs: node.latencyMs,
+        capacityMb: node.capacityMb,
+        assignedModelMb: node.assignedMb,
+        poolShareFraction: shareOfPool,
+        modelFraction: shareOfModel,
+        memoryUtilization: util,
+        layerStart: startLayer,
+        layerEnd: endLayer,
+        isLocal: isLocal,
+      ));
+    }
+
+    return slices;
   }
 
   void clearSplit() => split.clear();
