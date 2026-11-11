@@ -18,6 +18,20 @@ PrivateLM-Mesh is self-contained: native desktop and mobile inference engines (`
 
 ---
 
+## 📸 App Screenshots
+
+| **Unified Mesh & Device Layer Pipeline** | **Hermes-Lite Agents & Chug Queue** |
+| :---: | :---: |
+| ![Mesh Network Layer Pipeline](./docs/screenshots/mesh-network.jpg) | ![Hermes-Lite Agents & Chug Queue](./docs/screenshots/hermes-agents.jpg) |
+| *Form-factor device silhouettes (`Raven`, `Squirrel`, `15 ultra`) with proportional layer bars & offline node detection* | *Sandboxed Agent Workspace, Idle-Aware "Chug Mode", quick-start templates, and multi-step ReAct runs* |
+
+| **Interactive Chat, Effort & Agent Tools** | **GGUF Mesh Cluster & LiteRT Model Catalog** |
+| :---: | :---: |
+| ![Chat View with Reasoning Effort & Agent Tools](./docs/screenshots/chat-view.jpg) | ![Models Catalog](./docs/screenshots/models-catalog.jpg) |
+| *Per-turn Reasoning Effort selector (`Off`/`Low`/`Medium`/`High`), Thinking visibility toggle, and inline `Agent Tools` pill* | *Separated multi-device `GGUF (Mesh Cluster)` and on-device `LiteRT (Mobile)` model repositories* |
+
+---
+
 ## 🚀 Key Features in v1.3.0
 
 ### 🤖 Hermes-Lite Agent Harness & Idle-Aware "Chug Queue"
