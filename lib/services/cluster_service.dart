@@ -39,6 +39,7 @@ class MeshDeviceSlice {
   final int layerEnd;
   final bool isLocal;
   final bool isOffline;
+  final bool isAwayNode;
 
   const MeshDeviceSlice({
     required this.id,
@@ -57,9 +58,17 @@ class MeshDeviceSlice {
     required this.layerEnd,
     this.isLocal = false,
     this.isOffline = false,
+    this.isAwayNode = false,
   });
 
   int get assignedLayers => assignedModelMb > 0 ? math.max(1, layerEnd - layerStart) : 0;
+
+  /// Non-overlapping inclusive 0-based layer range label (e.g. `L00–L33`, `L34–L39`).
+  String get inclusiveLayerRangeLabel {
+    if (assignedModelMb <= 0 || layerEnd <= layerStart) return 'No layers';
+    final lastIdx = math.max(layerStart, layerEnd - 1);
+    return 'L${layerStart.toString().padLeft(2, '0')}–L${lastIdx.toString().padLeft(2, '0')}';
+  }
 }
 
 /// What this node does in the heterogeneous mesh cluster.
@@ -103,6 +112,23 @@ class ClusterNodeAllocation {
     this.transportType = TransportType.unknown,
     this.latencyMs = 1.0,
   });
+
+  /// True when this node is in the Away / Mobile / WAN Sub-Cluster.
+  bool get isAway {
+    if (worker == null) return false;
+    if (transportType.isAwayTransport(latencyMs)) return true;
+    return NetworkTransportService.isWanOrOverlayIp(worker!.host);
+  }
+
+  /// Subnet prefix used to group co-located Away devices (e.g. Away Laptop + Away Phone on same hotspot)
+  /// contiguously so tensors don't bounce back and forth across the internet.
+  String get localityGroupKey {
+    if (worker == null) return '0_home_local';
+    final host = worker!.host.trim();
+    final lastDot = host.lastIndexOf('.');
+    final prefix = lastDot > 0 ? host.substring(0, lastDot) : host;
+    return isAway ? '1_away_$prefix' : '0_home_$prefix';
+  }
 }
 
 /// Heterogeneous Mesh Cluster Service:
@@ -436,8 +462,8 @@ class ClusterService extends GetxService {
   }
 
   /// Finds saved workers that no longer answer at their address (they moved
-  /// to another Wi-Fi, a hotspot, or got a new IP) by their device ID on
-  /// the network, and updates them. Returns the ones still unreachable.
+  /// to another Wi-Fi, a 5G mobile hotspot, Tailscale VPN, or got a new IP)
+  /// by their device ID on the network, and updates them. Returns the ones still unreachable.
   Future<List<ClusterWorker>> relocateWorkers() async {
     final missing = <ClusterWorker>[];
     for (final w in workers) {
@@ -445,12 +471,34 @@ class ClusterService extends GetxService {
     }
     if (missing.isEmpty) return const [];
     final seen = await LlamaCluster.discover();
+    final discovery = Get.isRegistered<MeshDiscoveryService>()
+        ? Get.find<MeshDiscoveryService>()
+        : null;
     var moved = 0;
     final unreachable = <ClusterWorker>[];
     for (final w in missing) {
-      final match = seen.firstWhereOrNull((s) => w.id != null && s.id == w.id);
       final i = workers.indexWhere((x) => x.endpoint == w.endpoint);
-      if (match == null || match.endpoint == w.endpoint || i < 0) {
+      if (i < 0) continue;
+
+      // 1. Check MeshDiscoveryService first (handles WAN/Tailscale/5G roaming failover)
+      final meshMatch = discovery?.onlinePeerNodes
+          .firstWhereOrNull((m) => w.id != null && m.id == w.id);
+      if (meshMatch != null &&
+          meshMatch.endpoint != w.endpoint &&
+          await LlamaCluster.probe(meshMatch.endpoint)) {
+        workers[i] = w.movedTo(
+          meshMatch.host,
+          meshMatch.port,
+          transportType: meshMatch.isAwayNode ? 'wan' : meshMatch.transportType,
+          latencyMs: meshMatch.latencyMs,
+        );
+        moved++;
+        continue;
+      }
+
+      // 2. Fallback to LAN UDP discover
+      final match = seen.firstWhereOrNull((s) => w.id != null && s.id == w.id);
+      if (match == null || match.endpoint == w.endpoint) {
         unreachable.add(w);
         continue;
       }
@@ -459,7 +507,7 @@ class ClusterService extends GetxService {
     }
     if (moved > 0) {
       await _save();
-      Get.find<AppLogService>().info('Phone cluster: found $moved worker(s) at a new address');
+      Get.find<AppLogService>().info('Mesh cluster: relocated $moved roaming worker(s) to new address');
     }
     return unreachable;
   }
@@ -515,7 +563,7 @@ class ClusterService extends GetxService {
     await _save();
   }
 
-  /// Automatically synchronizes a discovered LAN peer into the unified mesh pool
+  /// Automatically synchronizes a discovered LAN or WAN/Mobile peer into the unified mesh pool
   /// when Mesh Pool mode is enabled, unless the user explicitly excluded it.
   Future<void> syncDiscoveredPeer(MeshNode node) async {
     if (!enabled.value || dedicatedWorkerOnly.value) return;
@@ -523,6 +571,8 @@ class ClusterService extends GetxService {
     if (node.host == wifiAddress.value || node.host == '127.0.0.1' || node.host == 'localhost') return;
 
     final existingIdx = workers.indexWhere((w) => w.host == node.host || (w.id != null && w.id == node.id));
+    final effectiveTransport = node.isAwayNode ? 'wan' : node.transportType;
+    final effectiveLatency = node.latencyMs ?? (node.isAwayNode ? 42.0 : 5.0);
     final updatedWorker = ClusterWorker(
       name: node.name,
       host: node.host,
@@ -531,12 +581,14 @@ class ClusterService extends GetxService {
       model: '${node.deviceType} ${node.gpuName.isNotEmpty ? "(${node.gpuName})" : ""}'.trim(),
       id: node.id,
       deviceType: node.deviceType,
-      transportType: node.transportType,
+      transportType: effectiveTransport,
       hardwareBackend: node.hardwareBackend,
-      latencyMs: 5.0,
+      latencyMs: effectiveLatency,
     );
     if (existingIdx >= 0) {
+      final hostChanged = workers[existingIdx].host != updatedWorker.host;
       workers[existingIdx] = updatedWorker;
+      if (hostChanged) await _save();
     } else {
       workers.add(updatedWorker);
       await _save();
@@ -637,7 +689,11 @@ class ClusterService extends GetxService {
         break;
     }
 
-    final used = nodes.where((p) => p.worker != null && p.assignedMb > 0).toList();
+    // Order active remote workers into Locality-Aware Sub-Clusters:
+    // [Home Sub-Cluster] ══(WAN)══► [Away Sub-Cluster]
+    // so activation tensors cross the mobile/internet WAN link only ONCE per token!
+    final orderedNodes = orderByLocalitySubClusters(nodes);
+    final used = orderedNodes.where((p) => p.worker != null && p.assignedMb > 0).toList();
 
     // Populate visual split presentation
     split.assignAll([
@@ -675,18 +731,36 @@ class ClusterService extends GetxService {
     return used.length;
   }
 
+  /// Locality-Aware Sub-Cluster Ordering:
+  /// Places the Local Coordinator first, followed by all Home Sub-Cluster nodes
+  /// (USB, Ethernet, Home Wi-Fi <24ms), followed by all Away / Mobile Sub-Cluster nodes
+  /// (5G, Hotspot, Tailscale/VPN >=24ms) grouped by shared subnet prefix so co-located
+  /// away devices stay contiguous and tensors cross the internet link only once per token.
+  static List<ClusterNodeAllocation> orderByLocalitySubClusters(
+    List<ClusterNodeAllocation> nodes,
+  ) {
+    final sorted = [...nodes];
+    sorted.sort((a, b) {
+      if (a.worker == null && b.worker != null) return -1;
+      if (b.worker == null && a.worker != null) return 1;
+      if (a.isAway != b.isAway) return a.isAway ? 1 : -1;
+      final groupCmp = a.localityGroupKey.compareTo(b.localityGroupKey);
+      if (groupCmp != 0) return groupCmp;
+      final tierA = a.worker == null ? 0 : a.transportType.priorityTier;
+      final tierB = b.worker == null ? 0 : b.transportType.priorityTier;
+      if (tierA != tierB) return tierA.compareTo(tierB);
+      return b.speed.compareTo(a.speed);
+    });
+    return sorted;
+  }
+
   /// Topology & Latency-Aware Scheduler:
   /// Packs layers into contiguous blocks along interconnect priority tiers:
-  /// Local (Tier 0) -> USB (Tier 1) -> Ethernet (Tier 2) -> Wi-Fi (Tier 3).
-  /// Excludes Wi-Fi nodes completely when model fits into low-latency tiers.
+  /// Home Sub-Cluster: Local (Tier 0) -> USB (Tier 1) -> Ethernet (Tier 2) -> Home Wi-Fi (Tier 3)
+  /// Away Sub-Cluster: WAN / 5G / Overlay VPN (Tier 4).
+  /// Excludes high-latency tiers completely when the model fits into faster local/Home tiers.
   static void _fillTopologyAware(List<ClusterNodeAllocation> nodes, double needMb) {
-    // Sort ascending by priority tier (Tier 0/1/2 first), then descending by speed
-    final sorted = [...nodes]..sort((a, b) {
-        final tierA = a.worker == null ? 0 : a.transportType.priorityTier;
-        final tierB = b.worker == null ? 0 : b.transportType.priorityTier;
-        if (tierA != tierB) return tierA.compareTo(tierB);
-        return b.speed.compareTo(a.speed);
-      });
+    final sorted = orderByLocalitySubClusters(nodes);
 
     // Reset assigned MB
     for (final n in sorted) {
@@ -839,9 +913,9 @@ class ClusterService extends GetxService {
             model: '${m.deviceType} ${m.gpuName.isNotEmpty ? "(${m.gpuName})" : ""}'.trim(),
             id: m.id,
             deviceType: m.deviceType,
-            transportType: m.transportType,
+            transportType: m.isAwayNode ? 'wan' : m.transportType,
             hardwareBackend: m.hardwareBackend,
-            latencyMs: 6.0,
+            latencyMs: m.latencyMs ?? (m.isAwayNode ? 42.0 : 6.0),
           ));
         }
       }
@@ -855,7 +929,7 @@ class ClusterService extends GetxService {
       latencyMs: 0.0,
     );
 
-    final allocations = <ClusterNodeAllocation>[
+    final rawAllocations = <ClusterNodeAllocation>[
       masterAlloc,
       if (enabled.value || peerWorkers.isNotEmpty)
         for (final w in peerWorkers)
@@ -872,18 +946,22 @@ class ClusterService extends GetxService {
     final strategy = schedulerStrategy.value;
     switch (strategy) {
       case ClusterSchedulerStrategy.topologyLatency:
-        _fillTopologyAware(allocations, needMb);
+        _fillTopologyAware(rawAllocations, needMb);
         break;
       case ClusterSchedulerStrategy.throughputWeighted:
-        _splitBySpeed(allocations, needMb);
+        _splitBySpeed(rawAllocations, needMb);
         break;
       case ClusterSchedulerStrategy.capacityBalanced:
-        _fillFastestFirst(allocations, needMb);
+        _fillFastestFirst(rawAllocations, needMb);
         break;
     }
 
+    // Order pipeline into [Home Sub-Cluster] -> [Away Sub-Cluster]
+    final allocations = orderByLocalitySubClusters(rawAllocations);
+
     final totalPoolMb = allocations.fold<double>(0.0, (sum, n) => sum + n.capacityMb);
     final totalAssignedMb = allocations.fold<double>(0.0, (sum, n) => sum + n.assignedMb);
+    final lastActiveIdx = allocations.lastIndexWhere((n) => n.assignedMb > 0);
 
     final slices = <MeshDeviceSlice>[];
     var currentLayer = 0;
@@ -900,7 +978,11 @@ class ClusterService extends GetxService {
 
       int layerCount = 0;
       if (node.assignedMb > 0 && totalAssignedMb > 0) {
-        layerCount = math.max(1, ((node.assignedMb / totalAssignedMb) * totalLayers).round());
+        if (i == lastActiveIdx) {
+          layerCount = math.max(1, totalLayers - currentLayer);
+        } else {
+          layerCount = math.max(1, ((node.assignedMb / totalAssignedMb) * totalLayers).round());
+        }
       }
       final startLayer = currentLayer;
       final endLayer = node.assignedMb > 0 ? math.min(totalLayers, startLayer + layerCount) : startLayer;
@@ -923,7 +1005,7 @@ class ClusterService extends GetxService {
         host: isLocal ? wifiAddress.value : w.host,
         deviceType: isLocal ? localType : (w.deviceType ?? 'Phone'),
         hardwareBackend: isLocal ? localHw : (w.hardwareBackend ?? 'Auto'),
-        transportType: isLocal ? TransportType.unknown : node.transportType,
+        transportType: isLocal ? TransportType.unknown : (node.isAway ? TransportType.wan : node.transportType),
         latencyMs: node.latencyMs,
         capacityMb: node.capacityMb,
         assignedModelMb: node.assignedMb,
@@ -934,6 +1016,7 @@ class ClusterService extends GetxService {
         layerEnd: endLayer,
         isLocal: isLocal,
         isOffline: false,
+        isAwayNode: node.isAway,
       ));
     }
 
@@ -961,6 +1044,7 @@ class ClusterService extends GetxService {
           layerEnd: 0,
           isLocal: false,
           isOffline: true,
+          isAwayNode: offNode.isAwayNode,
         ));
       }
     }

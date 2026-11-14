@@ -100,6 +100,10 @@ class _ClusterViewState extends State<ClusterView> {
         color = t.accent;
         label = '🌐 Ethernet${latency != null ? " · ${latency.toStringAsFixed(1)}ms" : ""}';
         break;
+      case TransportType.wan:
+        color = const Color(0xFFA855F7);
+        label = '🌍 WAN / 5G${latency != null ? " · ${latency.toStringAsFixed(0)}ms" : ""}';
+        break;
       case TransportType.wifi:
       case TransportType.unknown:
         color = t.muted;

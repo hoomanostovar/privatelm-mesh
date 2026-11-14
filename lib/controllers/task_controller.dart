@@ -60,6 +60,27 @@ class TaskController extends GetxController {
         final reset = t.copyWith(status: 'queued');
         tasks[i] = reset;
         _hive.saveTask(reset.id, reset.toMap());
+      } else if (t.status == 'completed' &&
+          t.goal.toLowerCase().contains('memory_store')) {
+        _syncExplicitFactFromGoalIfMissing(t.goal);
+      }
+    }
+  }
+
+  void _syncExplicitFactFromGoalIfMissing(String goal) {
+    final kvMatch = RegExp(
+      r'''['"`]([a-zA-Z0-9_.-]+)\s*=\s*([^'"`]+)['"`]''',
+    ).firstMatch(goal);
+    if (kvMatch != null) {
+      final k = kvMatch.group(1)!.trim();
+      final v = kvMatch.group(2)!.trim();
+      if (k.isNotEmpty && !harness.memoryEntries.containsKey(k)) {
+        harness.executeToolCall(
+          AgentToolCall(
+            name: 'memory_store',
+            arguments: {'action': 'set', 'key': k, 'value': v},
+          ),
+        );
       }
     }
   }
@@ -333,6 +354,9 @@ class TaskController extends GetxController {
             lastRunAt: DateTime.now(),
           );
           _updateTask(workingTask);
+          if (workingTask.goal.toLowerCase().contains('memory_store')) {
+            _syncExplicitFactFromGoalIfMissing(workingTask.goal);
+          }
           break;
         }
 

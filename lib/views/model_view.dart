@@ -70,7 +70,7 @@ class ModelView extends GetView<ModelController> {
         child: Obx(() {
           final scope = controller.modelScope.value;
           return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 72),
             children: [
               _buildScopeToggle(context),
               const SizedBox(height: 16),
@@ -1967,42 +1967,59 @@ class ModelView extends GetView<ModelController> {
           onPressed: busy ? null : () => _confirmDownload(context, model),
         );
       }
+      final rawSize = controller.modelSizeLabel(model);
+      final compactSize = rawSize.contains('+')
+          ? '${rawSize.split('+').first.trim()} + Vision'
+          : rawSize;
       return SizedBox(
-        width: 168,
-        child: Material(
-          color: t.surface,
-          borderRadius: BorderRadius.circular(18),
-          child: InkWell(
+        width: 172,
+        child: Container(
+          decoration: BoxDecoration(
+            color: t.surface,
             borderRadius: BorderRadius.circular(18),
-            splashFactory: NoSplash.splashFactory,
-            overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-            onTap: () => _showModelDetails(context, model,
-                controller.modelSizeLabel(model), const [], busy, null),
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _ModelAvatar(
-                      name: name,
-                      image: controller.isImageModel(model),
-                      size: 44),
-                  const Spacer(),
-                  Text(name,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: t.bodyStrong.copyWith(height: 1.25)),
-                  const SizedBox(height: 2),
-                  Text(_pitch[type]!, style: t.small),
-                  const SizedBox(height: 10),
-                  Row(children: [
-                    Expanded(
-                      child: Text(controller.modelSizeLabel(model),
-                          style: t.small.copyWith(fontFeatures: _tabular)),
-                    ),
-                    action,
-                  ]),
-                ],
+            border: Border.all(color: t.hairline, width: 0.8),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(18),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(18),
+              splashFactory: NoSplash.splashFactory,
+              overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+              onTap: () => _showModelDetails(context, model,
+                  controller.modelSizeLabel(model), const [], busy, null),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _ModelAvatar(
+                        name: name,
+                        image: controller.isImageModel(model),
+                        size: 42),
+                    const Spacer(),
+                    Text(name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: t.bodyStrong.copyWith(height: 1.2)),
+                    const SizedBox(height: 3),
+                    Text(_pitch[type]!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: t.small),
+                    const SizedBox(height: 10),
+                    Row(children: [
+                      Expanded(
+                        child: Text(compactSize,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: t.small.copyWith(fontFeatures: _tabular)),
+                      ),
+                      const SizedBox(width: 6),
+                      action,
+                    ]),
+                  ],
+                ),
               ),
             ),
           ),

@@ -287,19 +287,11 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
           cluster: cluster,
           discovery: mesh,
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
 
-        // 21st.dev Radar Scanner
-        MeshRadarScanner(
-          onlineCount: totalNodes,
-          onScanTap: () {
-            cluster.refreshWifiAddress();
-            mesh.broadcastPresence(forceUnicastSweep: true);
-            cluster.scanNearby();
-            Haptics.lightImpact();
-          },
-        ),
-        const SizedBox(height: 14),
+        // Cluster Role & Transport Controls
+        _buildClusterRoleAndControls(context),
+        const SizedBox(height: 12),
 
         // Aggregate HUD Card
         MeshAggregateTelemetryCard(
@@ -309,51 +301,61 @@ class _MeshNetworkViewState extends State<MeshNetworkView>
           tokensPerWatt: telemetry.tokensPerWatt,
           uptime: telemetry.formattedLocalUptime,
         ),
-        const SizedBox(height: 14),
-
-        // Cluster Role & Transport Controls
-        _buildClusterRoleAndControls(context),
-        const SizedBox(height: 14),
-
-        // Evaluated Capability Banner
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: t.surface,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: t.hairline),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      mesh.meshModelRecommendation,
-                      style: t.bodyStrong.copyWith(fontSize: 13),
-                    ),
-                  ),
-                  OptionInfoIcon(
-                    onTap: () => showOptionHelpByKey(context, 'cluster_mesh_audit'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Cluster Memory Pool: ${mesh.totalMeshVramGB > 0 ? "${mesh.totalMeshVramGB.toStringAsFixed(1)} GB VRAM + " : ""}${mesh.totalMeshFreeRamGB.toStringAsFixed(1)} GB RAM available',
-                style: t.caption.copyWith(color: t.muted),
-              ),
-            ],
-          ),
-        ),
         const SizedBox(height: 16),
 
         Row(
           children: [
             Text('Discovered Mesh Devices ($totalNodes)', style: t.label),
             const Spacer(),
+            InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () {
+                cluster.refreshWifiAddress();
+                mesh.broadcastPresence(forceUnicastSweep: true);
+                cluster.scanNearby();
+                Haptics.lightImpact();
+                showToast('Mesh Scan', 'Scanning LAN & probing WAN/Tailscale peers...');
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.radar_rounded, size: 14, color: t.accent),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Rescan',
+                      style: t.caption.copyWith(color: t.accent, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => showConnectAwayDeviceSheet(
+                context: context,
+                discovery: mesh,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.public_rounded, size: 14, color: Color(0xFFA855F7)),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Add Away / 5G',
+                      style: t.caption.copyWith(
+                        color: const Color(0xFFA855F7),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
             OptionInfoIcon(
               onTap: () => showOptionHelpByKey(context, 'cluster_workers'),
             ),

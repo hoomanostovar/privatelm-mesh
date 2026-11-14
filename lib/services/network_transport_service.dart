@@ -7,6 +7,32 @@ class NetworkTransportService {
   static final NetworkTransportService instance = NetworkTransportService._();
   NetworkTransportService._();
 
+  /// Returns true if [ip] is in the CGNAT / Tailscale / Overlay range (100.64.0.0/10)
+  /// or ZeroTier / WireGuard overlay subnets, or is a public non-RFC1918 WAN IP.
+  static bool isWanOrOverlayIp(String ip) {
+    final clean = ip.trim().toLowerCase();
+    if (clean.isEmpty || clean == '127.0.0.1' || clean == 'localhost') return false;
+    final parts = clean.split('.');
+    if (parts.length == 4) {
+      final o1 = int.tryParse(parts[0]);
+      final o2 = int.tryParse(parts[1]);
+      if (o1 != null && o2 != null) {
+        // 100.64.0.0/10 (Tailscale / Carrier-Grade NAT / Overlay VPN)
+        if (o1 == 100 && o2 >= 64 && o2 <= 127) return true;
+        // Private LAN RFC1918 ranges
+        if (o1 == 10) return false;
+        if (o1 == 192 && o2 == 168) return false;
+        if (o1 == 172 && o2 >= 16 && o2 <= 31) return false;
+        if (o1 == 169 && o2 == 254) return false;
+        // Any other valid IPv4 is a public WAN IP!
+        return true;
+      }
+    }
+    // Domain name / DDNS hostname
+    if (RegExp(r'[a-z]').hasMatch(clean)) return true;
+    return false;
+  }
+
   /// Determine the [TransportType] of an endpoint based on host and system interfaces.
   Future<TransportType> classifyEndpoint(String host) async {
     final cleanHost = host.trim().toLowerCase();
@@ -24,6 +50,11 @@ class NetworkTransportService {
       return TransportType.usb;
     }
 
+    // Tailscale / CGNAT / Overlay VPN (100.64.0.0/10) or public WAN IP / hostname
+    if (isWanOrOverlayIp(cleanHost)) {
+      return TransportType.wan;
+    }
+
     try {
       final interfaces = await NetworkInterface.list(
         type: InternetAddressType.IPv4,
@@ -33,6 +64,18 @@ class NetworkTransportService {
       // Check if target IP falls within an interface's subnet
       for (final iface in interfaces) {
         final ifaceName = iface.name.toLowerCase();
+        final hasWan = ifaceName.contains('tailscale') ||
+            ifaceName.contains('wireguard') ||
+            ifaceName.contains('wg') ||
+            ifaceName.contains('zerotier') ||
+            ifaceName.contains('zt') ||
+            ifaceName.contains('tun') ||
+            ifaceName.contains('utun') ||
+            ifaceName.contains('rmnet') ||
+            ifaceName.contains('ccmni') ||
+            ifaceName.contains('pdp_ip') ||
+            ifaceName.contains('cellular') ||
+            ifaceName.contains('wwan');
         final hasUsb = ifaceName.contains('usb') ||
             ifaceName.contains('rndis') ||
             ifaceName.contains('ncm') ||
@@ -51,13 +94,17 @@ class NetworkTransportService {
             ifaceName.contains('802.11');
 
         for (final addr in iface.addresses) {
-          // Same /24 subnet match
-          final ifacePrefix = addr.address.substring(0, addr.address.lastIndexOf('.'));
-          final targetPrefix = cleanHost.substring(0, cleanHost.lastIndexOf('.'));
-          if (ifacePrefix == targetPrefix) {
-            if (hasUsb) return TransportType.usb;
-            if (hasEth) return TransportType.ethernet;
-            if (hasWifi) return TransportType.wifi;
+          final lastDotA = addr.address.lastIndexOf('.');
+          final lastDotB = cleanHost.lastIndexOf('.');
+          if (lastDotA > 0 && lastDotB > 0) {
+            final ifacePrefix = addr.address.substring(0, lastDotA);
+            final targetPrefix = cleanHost.substring(0, lastDotB);
+            if (ifacePrefix == targetPrefix) {
+              if (hasWan) return TransportType.wan;
+              if (hasUsb) return TransportType.usb;
+              if (hasEth) return TransportType.ethernet;
+              if (hasWifi) return TransportType.wifi;
+            }
           }
         }
       }

@@ -149,6 +149,7 @@ class AgentHarnessService extends GetxService {
         );
       }
       await _ensureStarterWorkspaceFiles();
+      await _ingestMemoryMarkdownFileIfEmpty();
       await _syncMemoryMarkdownFile();
     } catch (e) {
       if (Get.isRegistered<AppLogService>()) {
@@ -246,6 +247,106 @@ class AgentHarnessService extends GetxService {
       }
       await file.writeAsString(buf.toString());
     } catch (_) {}
+  }
+
+  Future<void> _ingestMemoryMarkdownFileIfEmpty() async {
+    if (kIsWeb || workspacePath.value.isEmpty || memoryEntries.isNotEmpty) {
+      return;
+    }
+    try {
+      final file = File(
+        '${workspacePath.value}${Platform.pathSeparator}MEMORY.md',
+      );
+      if (await file.exists()) {
+        final raw = await file.readAsString();
+        await ingestMemoryMarkdownText(raw, syncFile: false);
+      }
+    } catch (_) {}
+  }
+
+  /// Parses `MEMORY.md` content (either `## key` sections or `key=value` / `- key: value` lines)
+  /// and merges any discovered facts into `memoryEntries`.
+  Future<void> ingestMemoryMarkdownText(
+    String markdown, {
+    bool syncFile = true,
+  }) async {
+    bool changed = false;
+    final lines = markdown.split('\n');
+    String? currentSectionKey;
+    final sectionBuffer = StringBuffer();
+
+    void flushSection() {
+      if (currentSectionKey != null) {
+        final val = sectionBuffer.toString().trim();
+        if (val.isNotEmpty &&
+            !val.startsWith('_No persistent memory entries')) {
+          memoryEntries[currentSectionKey!] = {
+            'value': val,
+            'updatedAt': DateTime.now().toIso8601String(),
+          };
+          changed = true;
+        }
+        currentSectionKey = null;
+        sectionBuffer.clear();
+      }
+    }
+
+    for (final rawLine in lines) {
+      final line = rawLine.trim();
+      if (line.isEmpty ||
+          line.startsWith('# ') ||
+          line.startsWith('_Updated:') ||
+          line.startsWith('_No persistent memory entries')) {
+        continue;
+      }
+      if (line.startsWith('## ')) {
+        flushSection();
+        currentSectionKey =
+            line.substring(3).replaceAll('`', '').trim();
+        continue;
+      }
+      if (currentSectionKey != null) {
+        sectionBuffer.writeln(line);
+        continue;
+      }
+      // Fallback: parse `- key: value` or `key=value` lines written by small models
+      final cleanLine =
+          line.replaceFirst(RegExp(r'^[-*•]\s*'), '').replaceAll('`', '').trim();
+      final eqIdx = cleanLine.indexOf('=');
+      final colonIdx = cleanLine.indexOf(':');
+      if (eqIdx > 0 && (colonIdx < 0 || eqIdx < colonIdx)) {
+        final k = cleanLine.substring(0, eqIdx).trim();
+        final v = cleanLine.substring(eqIdx + 1).trim();
+        if (k.isNotEmpty && v.isNotEmpty) {
+          memoryEntries[k] = {
+            'value': v,
+            'updatedAt': DateTime.now().toIso8601String(),
+          };
+          changed = true;
+        }
+      } else if (colonIdx > 0) {
+        final k = cleanLine.substring(0, colonIdx).trim();
+        final v = cleanLine.substring(colonIdx + 1).trim();
+        if (k.isNotEmpty && v.isNotEmpty) {
+          memoryEntries[k] = {
+            'value': v,
+            'updatedAt': DateTime.now().toIso8601String(),
+          };
+          changed = true;
+        }
+      }
+    }
+    flushSection();
+
+    if (changed) {
+      await _hive.setSetting(
+        AppConstants.keyAgentMemoryStore,
+        Map<String, dynamic>.from(memoryEntries),
+      );
+      if (syncFile) {
+        await _syncMemoryMarkdownFile();
+      }
+    }
   }
 
   // ── Hermes System Prompt & Tool Schema Definitions ──────────────────────
@@ -720,6 +821,9 @@ $memSummary''';
       final content = (args['content'] ?? args['text'] ?? '').toString();
       await file.parent.create(recursive: true);
       await file.writeAsString(content);
+      if (relPath.toLowerCase().endsWith('memory.md')) {
+        await ingestMemoryMarkdownText(content, syncFile: false);
+      }
       return AgentToolResult(
         toolName: 'workspace_files',
         ok: true,
@@ -732,6 +836,14 @@ $memSummary''';
       final content = (args['content'] ?? args['text'] ?? '').toString();
       await file.parent.create(recursive: true);
       await file.writeAsString(content, mode: FileMode.append);
+      if (relPath.toLowerCase().endsWith('memory.md')) {
+        try {
+          await ingestMemoryMarkdownText(
+            await file.readAsString(),
+            syncFile: false,
+          );
+        } catch (_) {}
+      }
       return AgentToolResult(
         toolName: 'workspace_files',
         ok: true,
@@ -1017,10 +1129,40 @@ $memSummary''';
     Map<String, dynamic> args,
     Stopwatch sw,
   ) async {
-    final action = (args['action'] ?? 'list').toString().toLowerCase().trim();
-    final key = (args['key'] ?? '').toString().trim();
+    var action = (args['action'] ?? '').toString().toLowerCase().trim();
+    var key = (args['key'] ?? args['name'] ?? '').toString().trim();
+    var rawValue =
+        (args['value'] ?? args['content'] ?? args['fact'] ?? args['text'] ?? '')
+            .toString()
+            .trim();
+
+    if (action.isEmpty) {
+      action = (key.isNotEmpty || rawValue.isNotEmpty) ? 'set' : 'list';
+    }
+    if (const ['save', 'store', 'add', 'write', 'put', 'update']
+        .contains(action)) {
+      action = 'set';
+    }
 
     if (action == 'set') {
+      // Tolerate small models passing `key=value` or `key: value` inside `key` or `value`
+      if (key.isEmpty && rawValue.isNotEmpty) {
+        final eqIdx = rawValue.indexOf('=');
+        final colonIdx = rawValue.indexOf(':');
+        if (eqIdx > 0 && (colonIdx < 0 || eqIdx < colonIdx)) {
+          key = rawValue.substring(0, eqIdx).trim();
+          rawValue = rawValue.substring(eqIdx + 1).trim();
+        } else if (colonIdx > 0) {
+          key = rawValue.substring(0, colonIdx).trim();
+          rawValue = rawValue.substring(colonIdx + 1).trim();
+        } else {
+          key = 'fact_${memoryEntries.length + 1}';
+        }
+      } else if (rawValue.isEmpty && key.contains('=')) {
+        final eqIdx = key.indexOf('=');
+        rawValue = key.substring(eqIdx + 1).trim();
+        key = key.substring(0, eqIdx).trim();
+      }
       if (key.isEmpty) {
         return AgentToolResult(
           toolName: 'memory_store',
@@ -1029,9 +1171,8 @@ $memSummary''';
           durationMs: sw.elapsedMilliseconds,
         );
       }
-      final value = (args['value'] ?? args['content'] ?? '').toString();
       memoryEntries[key] = {
-        'value': value,
+        'value': rawValue,
         'updatedAt': DateTime.now().toIso8601String(),
       };
       await _saveMemoryToHive();

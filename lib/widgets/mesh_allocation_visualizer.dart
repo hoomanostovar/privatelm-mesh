@@ -136,6 +136,160 @@ Future<void> showMeshDeviceRenameDialog({
   }
 }
 
+/// Shows a sheet to connect an Away / Mobile / Tailscale / Remote device over the internet.
+Future<void> showConnectAwayDeviceSheet({
+  required BuildContext context,
+  required MeshDiscoveryService discovery,
+}) async {
+  final controller = TextEditingController();
+  final isConnecting = false.obs;
+  final errorText = RxnString();
+
+  await showAppSheet<void>(
+    context,
+    title: 'Connect Away / Mobile Device',
+    subtitle:
+        'Pool a phone or computer away from home over 5G/LTE, Tailscale/WireGuard (100.x.y.z), or a mobile hotspot. Linking one away device automatically bridges its co-located sub-cluster.',
+    builder: (ctx) {
+      final t = AppTokens.of(ctx);
+      final overlayIp = discovery.localOverlayIp;
+      final lanIp = discovery.localLanIp;
+
+      return Obx(() {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(11),
+              decoration: BoxDecoration(
+                color: const Color(0xFFA855F7).withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: const Color(0xFFA855F7).withValues(alpha: 0.35),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.public_rounded, size: 16, color: Color(0xFFD8B4FE)),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'This Device\'s Reachable Addresses',
+                          style: t.caption.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: const Color(0xFFD8B4FE),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    [
+                      if (overlayIp != null) '🌍 Tailscale / VPN: $overlayIp',
+                      if (lanIp != null) '🏠 Home LAN: $lanIp',
+                      if (overlayIp == null && lanIp == null) 'Detecting network interfaces...',
+                    ].join('   ·   '),
+                    style: t.small.copyWith(fontFamily: 'Consolas', color: t.text),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              style: t.bodyStrong,
+              keyboardType: TextInputType.url,
+              decoration: InputDecoration(
+                labelText: 'Away Device IP or Tailscale Address',
+                hintText: 'e.g. 100.84.21.9 or 192.168.43.12',
+                prefixIcon: const Icon(Icons.link_rounded, size: 18),
+                filled: true,
+                fillColor: t.surface,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: t.hairline),
+                ),
+              ),
+              onSubmitted: (_) async {
+                if (isConnecting.value) return;
+                final input = controller.text.trim();
+                if (input.isEmpty) return;
+                isConnecting.value = true;
+                errorText.value = null;
+                final err = await discovery.connectRemotePeer(input);
+                isConnecting.value = false;
+                if (err == null) {
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  showToast(
+                    'Away Device Bridged',
+                    'Connected $input into Locality-Aware WAN Mesh Pool.',
+                    tone: ToastTone.success,
+                  );
+                } else {
+                  errorText.value = err;
+                }
+              },
+            ),
+            if (errorText.value != null) ...[
+              const SizedBox(height: 10),
+              AppNotice(
+                errorText.value!,
+                icon: Icons.error_outline_rounded,
+                color: t.red,
+              ),
+            ],
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: TonalButton.neutral(
+                    ctx,
+                    label: 'Cancel',
+                    onTap: () => Navigator.pop(ctx),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: PrimaryButton(
+                    label: isConnecting.value ? 'Bridging…' : 'Bridge Away Node',
+                    busy: isConnecting.value,
+                    icon: Icons.public_rounded,
+                    onPressed: isConnecting.value
+                        ? null
+                        : () async {
+                            final input = controller.text.trim();
+                            if (input.isEmpty) return;
+                            isConnecting.value = true;
+                            errorText.value = null;
+                            final err = await discovery.connectRemotePeer(input);
+                            isConnecting.value = false;
+                            if (err == null) {
+                              if (ctx.mounted) Navigator.pop(ctx);
+                              showToast(
+                                'Away Device Bridged',
+                                'Connected $input into Locality-Aware WAN Mesh Pool.',
+                                tone: ToastTone.success,
+                              );
+                            } else {
+                              errorText.value = err;
+                            }
+                          },
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+      });
+    },
+  );
+}
+
 /// Device Silhouette & Layer Stack Pipeline Visualizer.
 ///
 /// Renders each device in the mesh using its true form-factor silhouette:
@@ -301,10 +455,19 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
     );
 
     if (baseSlices.length == 1 && _simulatePeerWhenSolo) {
-      // Synthesize a realistic 4-device heterogeneous mesh (PC + Tablet + 2 Phones)
-      // matching the multi-device layer pipeline diagram!
+      // Synthesize a realistic 4-device Split Home + Away WAN Mesh:
+      // [🏠 Home PC + 🏠 Home Phone] ══(🌍 5G/WAN Bridge)══► [🌍 Away Laptop + 🌍 Away Phone]
       final local = baseSlices.first;
-      final simCapacities = <({String id, String name, String type, String hw, double capMb, TransportType trans, double lat})>[
+      final simCapacities = <({
+        String id,
+        String name,
+        String type,
+        String hw,
+        double capMb,
+        TransportType trans,
+        double lat,
+        bool away,
+      })>[
         (
           id: local.id,
           name: local.name,
@@ -313,33 +476,37 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
           capMb: local.capacityMb,
           trans: local.transportType,
           lat: 0.0,
+          away: false,
         ),
         (
-          id: 'sim_tablet',
-          name: widget.discovery.resolveCustomName('sim_tablet', fallback: 'iPad Pro Tablet'),
-          type: 'Tablet',
-          hw: 'Metal GPU · M2',
-          capMb: 6144.0,
-          trans: TransportType.wifi,
-          lat: 2.8,
-        ),
-        (
-          id: 'sim_phone_samsung',
-          name: widget.discovery.resolveCustomName('sim_phone_samsung', fallback: 'Samsung Galaxy S24'),
+          id: 'sim_phone_home',
+          name: widget.discovery.resolveCustomName('sim_phone_home', fallback: 'Home Phone (Wi-Fi)'),
           type: 'Phone',
           hw: 'Vulkan · Snapdragon',
           capMb: 4608.0,
-          trans: TransportType.usb,
-          lat: 1.4,
+          trans: TransportType.wifi,
+          lat: 3.4,
+          away: false,
         ),
         (
-          id: 'sim_phone_pixel',
-          name: widget.discovery.resolveCustomName('sim_phone_pixel', fallback: 'Pixel 8 Phone'),
+          id: 'sim_laptop_away',
+          name: widget.discovery.resolveCustomName('sim_laptop_away', fallback: 'Away Laptop (5G)'),
+          type: 'PC',
+          hw: 'Vulkan · RTX / iGPU',
+          capMb: 6144.0,
+          trans: TransportType.wan,
+          lat: 38.0,
+          away: true,
+        ),
+        (
+          id: 'sim_phone_away',
+          name: widget.discovery.resolveCustomName('sim_phone_away', fallback: 'Away Phone (5G)'),
           type: 'Phone',
-          hw: 'Vulkan · Tensor G3',
+          hw: 'Vulkan · Mobile GPU',
           capMb: 3584.0,
-          trans: TransportType.wifi,
-          lat: 4.5,
+          trans: TransportType.wan,
+          lat: 41.0,
+          away: true,
         ),
       ];
 
@@ -353,15 +520,21 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
         leftMb -= a;
       }
       final totalAssigned = math.max(1.0, assignedList.fold<double>(0, (s, a) => s + a));
+      final lastActiveIdx = assignedList.lastIndexWhere((a) => a > 0);
 
       var curLayer = 0;
       final result = <MeshDeviceSlice>[];
       for (var i = 0; i < simCapacities.length; i++) {
         final n = simCapacities[i];
         final assigned = assignedList[i];
-        final lCount = assigned > 0
-            ? math.max(1, ((assigned / totalAssigned) * selected.layers).round())
-            : 0;
+        int lCount = 0;
+        if (assigned > 0) {
+          if (i == lastActiveIdx) {
+            lCount = math.max(1, selected.layers - curLayer);
+          } else {
+            lCount = math.max(1, ((assigned / totalAssigned) * selected.layers).round());
+          }
+        }
         final startL = curLayer;
         final endL = assigned > 0 ? math.min(selected.layers, startL + lCount) : startL;
         curLayer = endL;
@@ -382,6 +555,7 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
           layerEnd: endL,
           isLocal: i == 0,
           isOffline: false,
+          isAwayNode: n.away,
         ));
       }
       return result;
@@ -633,55 +807,88 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
             ],
           ),
         ),
-        if (realNodeCount == 1)
-          Tooltip(
-            message: 'Preview PC + Tablet + Phones layer pipeline when solo',
-            child: InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: () {
-                Haptics.selectionClick();
-                setState(() => _simulatePeerWhenSolo = !_simulatePeerWhenSolo);
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
-                decoration: BoxDecoration(
-                  color: _simulatePeerWhenSolo
-                      ? const Color(0xFFA855F7).withValues(alpha: 0.2)
-                      : Colors.white.withValues(alpha: 0.05),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: _simulatePeerWhenSolo
-                        ? const Color(0xFFA855F7)
-                        : Colors.white.withValues(alpha: 0.14),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Tooltip(
+              message: 'Bridge an Away Phone or PC over 5G / Tailscale / WAN',
+              child: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () {
+                  Haptics.selectionClick();
+                  showConnectAwayDeviceSheet(
+                    context: context,
+                    discovery: widget.discovery,
+                  );
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFA855F7).withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: const Color(0xFFA855F7).withValues(alpha: 0.55),
+                    ),
                   ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.science_rounded,
-                      size: 13,
-                      color: _simulatePeerWhenSolo
-                          ? const Color(0xFFD8B4FE)
-                          : const Color(0xFF94A3B8),
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      _simulatePeerWhenSolo ? 'Preview: 4 Devices' : 'Preview Multi-Device',
-                      style: TextStyle(
-                        fontFamily: _fontMono,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: _simulatePeerWhenSolo
-                            ? const Color(0xFFD8B4FE)
-                            : const Color(0xFF94A3B8),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.public_rounded,
+                        size: 13,
+                        color: Color(0xFFD8B4FE),
                       ),
-                    ),
-                  ],
+                      SizedBox(width: 5),
+                      Text(
+                        'Link Away / 5G',
+                        style: TextStyle(
+                          fontFamily: _fontMono,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFFD8B4FE),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
+            if (realNodeCount == 1) ...[
+              const SizedBox(width: 6),
+              Tooltip(
+                message: 'Preview Home + Away (5G/WAN) 4-Device Layer Pipeline',
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () {
+                    Haptics.selectionClick();
+                    setState(() => _simulatePeerWhenSolo = !_simulatePeerWhenSolo);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: _simulatePeerWhenSolo
+                          ? const Color(0xFF00F0FF).withValues(alpha: 0.18)
+                          : Colors.white.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: _simulatePeerWhenSolo
+                            ? const Color(0xFF00F0FF)
+                            : Colors.white.withValues(alpha: 0.14),
+                      ),
+                    ),
+                    child: Icon(
+                      Icons.science_rounded,
+                      size: 13,
+                      color: _simulatePeerWhenSolo
+                          ? const Color(0xFF00F0FF)
+                          : const Color(0xFF94A3B8),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
       ],
     );
   }
@@ -807,6 +1014,8 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
                 _buildPipelineArrow(
                   active: !slices[i].isOffline && slices[i].assignedModelMb > 0,
                   isOffline: slices[i].isOffline,
+                  isWanCrossing: !slices[i - 1].isAwayNode && slices[i].isAwayNode,
+                  isAwayLink: slices[i].isAwayNode,
                   color: _nodePalette[i % _nodePalette.length],
                 ),
               _buildSingleDeviceSilhouetteColumn(
@@ -829,8 +1038,63 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
   Widget _buildPipelineArrow({
     required bool active,
     required bool isOffline,
+    required bool isWanCrossing,
+    required bool isAwayLink,
     required Color color,
   }) {
+    const wanViolet = Color(0xFFA855F7);
+    if (isWanCrossing && !isOffline) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+          decoration: BoxDecoration(
+            color: wanViolet.withValues(alpha: active ? 0.18 : 0.07),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: wanViolet.withValues(alpha: active ? 0.65 : 0.25),
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.public_rounded,
+                size: 18,
+                color: active ? const Color(0xFFD8B4FE) : const Color(0xFF64748B),
+              ),
+              const SizedBox(height: 2),
+              Icon(
+                Icons.double_arrow_rounded,
+                size: 16,
+                color: active ? const Color(0xFFD8B4FE) : const Color(0xFF64748B),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                active ? 'WAN BRIDGE' : 'WAN IDLE',
+                style: TextStyle(
+                  fontFamily: _fontMono,
+                  fontSize: 8.0,
+                  fontWeight: FontWeight.w800,
+                  color: active ? const Color(0xFFD8B4FE) : const Color(0xFF64748B),
+                ),
+              ),
+              Text(
+                '1x Hop',
+                style: TextStyle(
+                  fontFamily: _fontMono,
+                  fontSize: 7.5,
+                  color: active
+                      ? const Color(0xFFD8B4FE).withValues(alpha: 0.8)
+                      : const Color(0xFF64748B),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Column(
@@ -845,7 +1109,9 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
           ),
           const SizedBox(height: 2),
           Text(
-            isOffline ? 'OFFLINE' : (active ? 'RPC' : 'IDLE'),
+            isOffline
+                ? 'OFFLINE'
+                : (active ? (isAwayLink ? '5G RPC' : 'LAN RPC') : 'IDLE'),
             style: TextStyle(
               fontFamily: _fontMono,
               fontSize: 8.5,
@@ -949,14 +1215,16 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
               Text(
                 slice.isOffline
                     ? 'OFFLINE · ${slice.host ?? "Unreachable"}'
-                    : '${slice.deviceType.toUpperCase()} · ${(slice.capacityMb / 1024).toStringAsFixed(1)} GB Pool',
+                    : '${slice.isAwayNode ? "🌍 AWAY" : "🏠 HOME"} · ${(slice.capacityMb / 1024).toStringAsFixed(1)} GB Pool',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontFamily: _fontMono,
                   fontSize: 9.5,
                   fontWeight: FontWeight.w600,
-                  color: slice.isOffline ? _dangerColor : const Color(0xFF94A3B8),
+                  color: slice.isOffline
+                      ? _dangerColor
+                      : (slice.isAwayNode ? const Color(0xFFD8B4FE) : const Color(0xFF94A3B8)),
                 ),
               ),
               const SizedBox(height: 8),
@@ -1039,7 +1307,7 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
                 slice.isOffline
                     ? 'Tap name above to rename'
                     : (slice.assignedModelMb > 0
-                        ? 'Layers L${slice.layerStart.toString().padLeft(2, '0')}–L${slice.layerEnd.toString().padLeft(2, '0')} ($filledSlots/$maxSlots Slots)'
+                        ? 'Layers ${slice.inclusiveLayerRangeLabel} ($filledSlots/$maxSlots Slots)'
                         : 'No layers assigned'),
                 style: const TextStyle(
                   fontFamily: _fontMono,
@@ -1062,24 +1330,34 @@ class _MeshAllocationVisualizerState extends State<MeshAllocationVisualizer>
     required bool fitsInMesh,
   }) {
     if (slices.isEmpty) return const SizedBox.shrink();
+    final poolUsedPct = ((needMb / math.max(1.0, totalPoolMb)) * 100).clamp(0.0, 100.0);
+    final extraNeededGb = math.max(0.0, (needMb - totalPoolMb) / 1024.0);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text(
-              'PROPORTIONAL MEMORY POOL SHARE  ·  TAP ANY DEVICE NAME ABOVE TO RENAME',
-              style: TextStyle(
-                fontFamily: _fontMono,
-                fontSize: 9.5,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.6,
-                color: Color(0xFF94A3B8),
+            const Flexible(
+              child: Text(
+                'PROPORTIONAL MEMORY POOL SHARE  ·  TAP DEVICE NAME TO RENAME',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontFamily: _fontMono,
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6,
+                  color: Color(0xFF94A3B8),
+                ),
               ),
             ),
+            const SizedBox(width: 8),
             Text(
-              '${((needMb / math.max(1.0, totalPoolMb)) * 100).clamp(0.0, 999.0).toStringAsFixed(0)}% Pool Used',
+              fitsInMesh
+                  ? '${poolUsedPct.toStringAsFixed(0)}% Pool Used'
+                  : '100% Pool Used (+${extraNeededGb.toStringAsFixed(1)} GB Needed)',
               style: TextStyle(
                 fontFamily: _fontMono,
                 fontSize: 10,

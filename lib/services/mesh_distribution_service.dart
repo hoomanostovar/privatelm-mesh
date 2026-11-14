@@ -113,6 +113,46 @@ class MeshDistributionService extends GetxService {
 
     final path = request.uri.path;
 
+    // Handle WAN / Mobile status & multi-node mesh gossip handshake:
+    // GET /api/mesh/status or POST /api/mesh/handshake
+    if (path == '/api/mesh/status' || path == '/api/mesh/handshake') {
+      try {
+        final remoteIp = request.connectionInfo?.remoteAddress.address ?? '';
+        final discovery = Get.isRegistered<MeshDiscoveryService>()
+            ? Get.find<MeshDiscoveryService>()
+            : null;
+
+        if (request.method == 'POST' && discovery != null) {
+          final bodyStr = await utf8.decodeStream(request);
+          if (bodyStr.trim().isNotEmpty) {
+            final incoming = jsonDecode(bodyStr) as Map<String, dynamic>;
+            await discovery.ingestRemoteHandshake(incoming, remoteIp: remoteIp);
+          }
+        }
+
+        if (Get.isRegistered<ClusterService>()) {
+          final cluster = Get.find<ClusterService>();
+          if (!cluster.worker.value.running) {
+            unawaited(cluster.startWorker());
+          }
+        }
+
+        final statusPayload = discovery != null
+            ? await discovery.buildFullHandshakePayload()
+            : <String, dynamic>{'status': 'ok', 'port': 50052};
+
+        request.response.statusCode = HttpStatus.ok;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode(statusPayload));
+        await request.response.close();
+      } catch (e) {
+        request.response.statusCode = HttpStatus.internalServerError;
+        request.response.write(jsonEncode({'error': e.toString()}));
+        await request.response.close();
+      }
+      return;
+    }
+
     // Handle peer worker auto-pair command: POST /api/mesh/pair-worker
     if (request.method == 'POST' && path == '/api/mesh/pair-worker') {
       try {

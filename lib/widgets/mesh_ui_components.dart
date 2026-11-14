@@ -354,6 +354,8 @@ class MeshNodeCard extends StatelessWidget {
 
   Color _statusColor(AppTokens t) {
     switch (status) {
+      case 'offline':
+        return t.red;
       case 'communicating':
         return t.accent;
       case 'loading':
@@ -369,6 +371,21 @@ class MeshNodeCard extends StatelessWidget {
 
   Widget _transportPill(BuildContext context) {
     final t = AppTokens.of(context);
+    if (status == 'offline' || transportType == 'Unreachable') {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+        decoration: BoxDecoration(
+          color: t.red.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: t.red.withValues(alpha: 0.3)),
+        ),
+        child: Text(
+          '⚠️ Unreachable',
+          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: t.red),
+        ),
+      );
+    }
+
     final transport = TransportTypeExt.fromString(transportType);
     final Color color;
     final String label;
@@ -380,12 +397,18 @@ class MeshNodeCard extends StatelessWidget {
         break;
       case TransportType.ethernet:
         color = t.accent;
-        label = '🌐 LAN${latencyMs != null ? " · ${latencyMs!.toStringAsFixed(1)}ms" : ""}';
+        label = '🏠 LAN${latencyMs != null ? " · ${latencyMs!.toStringAsFixed(1)}ms" : ""}';
+        break;
+      case TransportType.wan:
+        color = const Color(0xFFA855F7);
+        label = '🌍 WAN / 5G${latencyMs != null ? " · ${latencyMs!.toStringAsFixed(0)}ms" : ""}';
         break;
       case TransportType.wifi:
       case TransportType.unknown:
         color = t.muted;
-        label = '📶 Wi-Fi${latencyMs != null ? " · ${latencyMs!.toStringAsFixed(1)}ms" : ""}';
+        label = isLocal
+            ? '🏠 Local Bus'
+            : '🏠 Wi-Fi${latencyMs != null ? " · ${latencyMs!.toStringAsFixed(1)}ms" : ""}';
         break;
     }
 

@@ -14,6 +14,11 @@ enum TransportType {
   /// Moderate latency (5 to 25 ms), subject to jitter and airtime contention.
   wifi,
 
+  /// Wide Area Network / Mobile Data (5G/4G/LTE) / Overlay Mesh VPN (Tailscale, WireGuard, ZeroTier).
+  /// Higher latency (25 to 120 ms) across internet/cellular links; scheduled as a contiguous
+  /// Away Sub-Cluster so activation tensors cross the internet link only once per token.
+  wan,
+
   /// Unknown or default network transport.
   unknown,
 }
@@ -27,6 +32,8 @@ extension TransportTypeExt on TransportType {
         return 'ethernet';
       case TransportType.wifi:
         return 'wifi';
+      case TransportType.wan:
+        return 'wan';
       case TransportType.unknown:
         return 'unknown';
     }
@@ -39,7 +46,9 @@ extension TransportTypeExt on TransportType {
       case TransportType.ethernet:
         return 'Ethernet 🌐 (Wired LAN)';
       case TransportType.wifi:
-        return 'Wi-Fi 📶 (Wireless)';
+        return 'Wi-Fi 📶 (Home Wireless)';
+      case TransportType.wan:
+        return 'WAN / 5G 🌍 (Mobile / Overlay)';
       case TransportType.unknown:
         return 'Network';
     }
@@ -53,6 +62,8 @@ extension TransportTypeExt on TransportType {
         return 'Ethernet 🌐';
       case TransportType.wifi:
         return 'Wi-Fi 📶';
+      case TransportType.wan:
+        return 'WAN / 5G 🌍';
       case TransportType.unknown:
         return 'LAN';
     }
@@ -66,6 +77,8 @@ extension TransportTypeExt on TransportType {
         return Icons.settings_ethernet_rounded;
       case TransportType.wifi:
         return Icons.wifi_rounded;
+      case TransportType.wan:
+        return Icons.public_rounded;
       case TransportType.unknown:
         return Icons.device_hub_rounded;
     }
@@ -79,12 +92,14 @@ extension TransportTypeExt on TransportType {
         return const Color(0xFF3B82F6); // Blue
       case TransportType.wifi:
         return const Color(0xFFF59E0B); // Amber / Orange
+      case TransportType.wan:
+        return const Color(0xFFA855F7); // Plasma Violet (WAN / Mobile)
       case TransportType.unknown:
         return Colors.grey;
     }
   }
 
-  /// Priority tier: 0 (local), 1 (USB), 2 (Ethernet), 3 (Wi-Fi).
+  /// Priority tier: 0 (local), 1 (USB), 2 (Ethernet), 3 (Wi-Fi), 4 (WAN / Mobile).
   int get priorityTier {
     switch (this) {
       case TransportType.usb:
@@ -93,8 +108,10 @@ extension TransportTypeExt on TransportType {
         return 2;
       case TransportType.wifi:
         return 3;
-      case TransportType.unknown:
+      case TransportType.wan:
         return 4;
+      case TransportType.unknown:
+        return 5;
     }
   }
 
@@ -106,10 +123,20 @@ extension TransportTypeExt on TransportType {
       case TransportType.ethernet:
         return 0.8;
       case TransportType.wifi:
-        return 15.0;
+        return 12.0;
+      case TransportType.wan:
+        return 42.0;
       case TransportType.unknown:
         return 10.0;
     }
+  }
+
+  /// Whether this node is an Away / Mobile / WAN node (either classified as WAN/VPN
+  /// or measured with internet/cellular round-trip latency >= 24 ms).
+  bool isAwayTransport([double? latencyMs]) {
+    if (this == TransportType.wan) return true;
+    if (this == TransportType.usb || this == TransportType.ethernet) return false;
+    return latencyMs != null && latencyMs >= 24.0;
   }
 
   static TransportType fromString(String? val) {
@@ -120,6 +147,19 @@ extension TransportTypeExt on TransportType {
     }
     if (lower.contains('ethernet') || lower.contains('eth') || lower.contains('lan')) {
       return TransportType.ethernet;
+    }
+    if (lower.contains('wan') ||
+        lower.contains('5g') ||
+        lower.contains('4g') ||
+        lower.contains('lte') ||
+        lower.contains('mobile') ||
+        lower.contains('tailscale') ||
+        lower.contains('vpn') ||
+        lower.contains('wireguard') ||
+        lower.contains('zerotier') ||
+        lower.contains('internet') ||
+        lower.contains('away')) {
+      return TransportType.wan;
     }
     if (lower.contains('wi-fi') || lower.contains('wifi') || lower.contains('wlan')) {
       return TransportType.wifi;

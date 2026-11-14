@@ -188,7 +188,7 @@ class TaskView extends GetView<TaskController> {
           ),
           const SectionFootnote('Swipe a task left to delete it.'),
         ],
-        const SizedBox(height: 24),
+        const SizedBox(height: 56),
       ],
     );
   }
@@ -206,7 +206,7 @@ class TaskView extends GetView<TaskController> {
       final maxSteps = harness.maxSteps.value;
 
       return Container(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
           color: t.surface,
           borderRadius: BorderRadius.circular(16),
@@ -215,39 +215,6 @@ class TaskView extends GetView<TaskController> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(7),
-                  decoration: BoxDecoration(
-                    color: t.accent.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(Icons.hub_rounded, size: 18, color: t.accent),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Hermes-Lite ReAct Harness', style: t.bodyStrong),
-                      Text(
-                        '5 built-in tools · Auto-compacting loop · Zero token cost',
-                        style: t.small,
-                      ),
-                    ],
-                  ),
-                ),
-                AppTag(
-                  controller.isExecuting.value ? 'CHUGGING' : 'READY',
-                  color: controller.isExecuting.value ? t.accent : t.green,
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Divider(height: 1, color: t.hairline),
-            const SizedBox(height: 12),
-
             // Workspace Directory row
             Row(
               children: [
@@ -257,7 +224,25 @@ class TaskView extends GetView<TaskController> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Sandboxed Agent Workspace', style: t.caption.copyWith(fontWeight: FontWeight.w600, color: t.text)),
+                      Row(
+                        children: [
+                          Text(
+                            'Sandboxed Agent Workspace',
+                            style: t.caption.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: t.text,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          AppTag(
+                            controller.isExecuting.value ? 'CHUGGING' : 'READY',
+                            color: controller.isExecuting.value
+                                ? t.accent
+                                : t.green,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
                       Text(
                         wsPath.isEmpty ? 'Default Documents Workspace' : wsPath,
                         style: GoogleFonts.jetBrainsMono(
@@ -286,6 +271,8 @@ class TaskView extends GetView<TaskController> {
                   ),
               ],
             ),
+            const SizedBox(height: 8),
+            Divider(height: 1, color: t.hairline),
             const SizedBox(height: 8),
 
             // Idle-aware Chug Mode toggle
